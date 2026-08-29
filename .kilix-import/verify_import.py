@@ -19,7 +19,7 @@ from typing import Any, Iterable
 OWNED_PREFIX = ".kilix-import/"
 PROVENANCE_REL = ".kilix-import/PROVENANCE.json"
 EXPECTED_SCHEMA = "kilix.voicebox.curated-import/v1"
-EXPECTED_STATUS = "PREP7_CLEAN_IMPORT_CANDIDATE_NOT_P8"
+EXPECTED_STATUS = "F104CONT_CLEAN_FORK_CANDIDATE_NOT_P8"
 EXPECTED_IDENTITY = "itsmygithubacct <itsmygithubacct@users.noreply.github.com>"
 EXPECTED_IMPORT_COMMIT = "08e763fa8f734fe519b14cf6e9810404a7aa2617"
 EXPECTED_IMPORT_TREE = "57f4545ddb5b163b0df8429b0fb12de66d905ebd"
@@ -121,7 +121,17 @@ def validate_provenance(provenance: dict[str, Any]) -> None:
     }], "RISK_AUTHORITY", "accepted source-risk population differs from 1/1")
     hygiene_delta = provenance.get("hygiene_delta", {})
     require(hygiene_delta == {
-        "status": "PREP7_CANDIDATE_NOT_INDEPENDENTLY_ACCEPTED",
+        "status": "F104CONT_CANDIDATE_NOT_INDEPENDENTLY_ACCEPTED",
+        "changed_source_paths": [
+            ".gitignore",
+            "app/src/assets/voicebox-logo.png",
+            "tauri/assets/Voicebox_Microphone.png",
+            "tauri/assets/voicebox.icon/Assets/Voicebox.png",
+            "tauri/assets/voicebox.icon/Assets/Voicebox_Microphone.png",
+            "tauri/src-tauri/gen/Assets.car",
+            "tauri/src-tauri/tauri.conf.json",
+            "tauri/src-tauri/tauri.macos.conf.json",
+        ],
         "normalized_pngs": [
             {
                 "path": "app/src/assets/voicebox-logo.png",
@@ -148,15 +158,43 @@ def validate_provenance(provenance: dict[str, Any]) -> None:
                 "decoded_idat_sha256": "4629a315a89854acc3b4c00bc70198b719e6c9e90a401e1423b7429fe32b004a",
             },
         ],
-        "scanner_exception_candidate": {
-            "arm": "tree/PII+hosts",
+        "generated_binary_boundary": {
             "path": "tauri/src-tauri/gen/Assets.car",
-            "file_sha256": "aa87dbf86a2528b7df6118904bc8cb9af5953f63bb12393b029cccef2193b01c",
-            "matched_unit_sha256": "af732763bb717caae650c2e3f5b57992d4a87ff4cc03a61e5a05d54928ac41bd",
-            "matched_units": 1,
-            "disposition": "INDEPENDENT_REVIEW_REQUIRED_NOT_ALLOWLISTED",
+            "import_bytes": 3847048,
+            "import_sha256": "aa87dbf86a2528b7df6118904bc8cb9af5953f63bb12393b029cccef2193b01c",
+            "previous_matched_unit_sha256": "af732763bb717caae650c2e3f5b57992d4a87ff4cc03a61e5a05d54928ac41bd",
+            "previous_matched_units": 1,
+            "head_tracked": False,
+            "ignored_build_output": True,
+            "previous_exception_accepted": False,
+            "scanner_exception_required_at_head": False,
+            "gitignore": {
+                "path": ".gitignore",
+                "sha256": "86d03696b92c24545e824e09e7bf29152c510c9a476d048071f040b523689ca0",
+                "exact_rule": "tauri/src-tauri/gen/Assets.car",
+            },
+            "regenerator": {
+                "path": "tauri/src-tauri/build.rs",
+                "sha256": "f2642864caf1eb3fa50aafecf38ee37e08c3b40c28aa4ff63bbfab56d6f28fba",
+                "target_os": "macos",
+                "tool": "xcrun actool",
+                "build_executed": False,
+            },
+            "resource_config": {
+                "base_path": "tauri/src-tauri/tauri.conf.json",
+                "base_sha256": "d6625a6f6fc3bd950cc2eec8df3d78b1955bf036029c6c6b59ed8e4895388386",
+                "platform_path": "tauri/src-tauri/tauri.macos.conf.json",
+                "platform_sha256": "5bda79a9e350df860da2b8261333816c19772c8c86fd63f23fd7bb49bf6b1d27",
+                "platform": "macos",
+                "resources": {
+                    "gen/Assets.car": "./",
+                    "gen/voicebox.icns": "./",
+                    "gen/partial.plist": "./",
+                },
+            },
+            "disposition": "REMOVED_FROM_TRACKED_FORK_REGENERATED_ONLY_ON_MACOS",
         },
-    }, "HYGIENE_DELTA", "hygiene delta or pending exception drifted")
+    }, "HYGIENE_DELTA", "hygiene delta or generated-binary boundary drifted")
 
 
 def risk_paths(paths: Iterable[str]) -> list[str]:
@@ -270,6 +308,78 @@ def verify_png_normalization(root: Path, import_commit: str,
     return len(rows)
 
 
+def verify_generated_binary_boundary(root: Path, import_commit: str,
+                                     boundary: dict[str, Any]) -> int:
+    path = boundary["path"]
+    imported = git_blob(root, import_commit, path)
+    require(len(imported) == boundary["import_bytes"],
+            "GENERATED_IMPORT_SIZE", "imported generated binary size drifted")
+    require(sha256_bytes(imported) == boundary["import_sha256"],
+            "GENERATED_IMPORT_IDENTITY", "imported generated binary identity drifted")
+    require(not (root / path).exists(), "GENERATED_BINARY_PRESENT",
+            "generated binary must not be stored in the current fork tree")
+
+    ignore = boundary["gitignore"]
+    require(sha256_file(root / ignore["path"]) == ignore["sha256"],
+            "GENERATED_IGNORE_IDENTITY", "generated-binary ignore file drifted")
+    ignore_lines = (root / ignore["path"]).read_text(encoding="utf-8").splitlines()
+    require(ignore_lines.count(ignore["exact_rule"]) == 1,
+            "GENERATED_IGNORE_RULE", "generated binary needs exactly 1/1 narrow ignore rule")
+    ignored = git(root, "check-ignore", "--quiet", "--no-index", "--", path, check=False)
+    require(ignored.returncode == 0, "GENERATED_NOT_IGNORED",
+            "regenerated binary would become an untracked publication input")
+
+    regenerator = boundary["regenerator"]
+    current_regenerator = (root / regenerator["path"]).read_bytes()
+    imported_regenerator = git_blob(root, import_commit, regenerator["path"])
+    require(current_regenerator == imported_regenerator,
+            "REGENERATOR_DRIFT", "upstream macOS regeneration rule changed")
+    require(sha256_bytes(current_regenerator) == regenerator["sha256"],
+            "REGENERATOR_IDENTITY", "macOS regeneration rule identity drifted")
+    regenerator_text = current_regenerator.decode("utf-8")
+    require('#[cfg(target_os = "macos")]' in regenerator_text
+            and 'Command::new("xcrun")' in regenerator_text
+            and '"actool"' in regenerator_text,
+            "REGENERATOR_DECLARATION",
+            "generated binary is not bounded to the declared macOS actool rule")
+
+    resource = boundary["resource_config"]
+    require(resource["platform"] == "macos", "RESOURCE_PLATFORM",
+            "generated resource configuration is not macOS-only")
+    base_path = resource["base_path"]
+    platform_path = resource["platform_path"]
+    require(sha256_file(root / base_path) == resource["base_sha256"],
+            "BASE_CONFIG_IDENTITY", "base Tauri configuration identity drifted")
+    require(sha256_file(root / platform_path) == resource["platform_sha256"],
+            "PLATFORM_CONFIG_IDENTITY", "macOS Tauri configuration identity drifted")
+
+    imported_base = json.loads(git_blob(root, import_commit, base_path))
+    imported_resources = imported_base.get("bundle", {}).get("resources")
+    require(imported_resources == resource["resources"], "IMPORTED_RESOURCES",
+            "recorded resource population differs from the imported 3/3 mappings")
+    expected_base = dict(imported_base)
+    expected_bundle = dict(imported_base["bundle"])
+    expected_bundle.pop("resources")
+    expected_base["bundle"] = expected_bundle
+    with (root / base_path).open("r", encoding="utf-8") as handle:
+        current_base = json.load(handle)
+    require(current_base == expected_base, "BASE_CONFIG_DELTA",
+            "base Tauri config changed beyond removing the macOS resource mapping")
+    with (root / platform_path).open("r", encoding="utf-8") as handle:
+        platform_config = json.load(handle)
+    require(platform_config == {
+        "$schema": imported_base["$schema"],
+        "bundle": {"resources": resource["resources"]},
+    }, "PLATFORM_CONFIG_DELTA",
+            "macOS config differs from the exact 3/3 moved resource mappings")
+    absent_at_import = git(
+        root, "cat-file", "-e", f"{import_commit}:{platform_path}", check=False
+    )
+    require(absent_at_import.returncode != 0, "PLATFORM_CONFIG_PREEXISTED",
+            "macOS split config unexpectedly existed in the immutable import root")
+    return 1
+
+
 def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[str, int]:
     status = git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all").stdout
     require(status == b"", "WORKTREE_NOT_CLEAN",
@@ -313,8 +423,12 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
     source = sorted(path for path in current_paths if not path.startswith(OWNED_PREFIX))
     require(owned == provenance["import"]["control_paths"], "OWNED_POPULATION",
             "current import control population differs from 4/4")
-    require(source == import_source, "CURRENT_SOURCE_PATHS",
-            "current source path population differs from the 406/406 imported paths")
+    binary_boundary = provenance["hygiene_delta"]["generated_binary_boundary"]
+    removed_path = binary_boundary["path"]
+    added_path = binary_boundary["resource_config"]["platform_path"]
+    expected_current_source = sorted((set(import_source) - {removed_path}) | {added_path})
+    require(source == expected_current_source, "CURRENT_SOURCE_PATHS",
+            "current source population differs from the exact 405/406 retained plus 1/1 added paths")
     source_delta_raw = git(
         root, "diff", "--name-only", "-z", import_commit, "HEAD", "--"
     ).stdout
@@ -324,10 +438,13 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
         if part and not part.decode("utf-8", "strict").startswith(OWNED_PREFIX)
     )
     normalized_rows = provenance["hygiene_delta"]["normalized_pngs"]
-    expected_delta = sorted(row["path"] for row in normalized_rows)
+    expected_delta = provenance["hygiene_delta"]["changed_source_paths"]
     require(source_delta == expected_delta, "CURRENT_SOURCE_DELTA",
-            "current source delta differs from the 4/4 reviewed PNG paths")
+            "current source delta differs from the exact 8/8 bounded paths")
     normalized_count = verify_png_normalization(root, import_commit, normalized_rows)
+    generated_binary_count = verify_generated_binary_boundary(
+        root, import_commit, binary_boundary
+    )
 
     current_risks = risk_paths(source)
     require(current_risks == expected_risk_paths, "CURRENT_RISK_POPULATION",
@@ -341,11 +458,6 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
     licence_path = root / expected["licence_path"]
     require(sha256_file(licence_path) == expected["licence_sha256"],
             "LICENCE_IDENTITY", "upstream MIT licence bytes drifted")
-
-    exception = provenance["hygiene_delta"]["scanner_exception_candidate"]
-    require(sha256_file(root / exception["path"]) == exception["file_sha256"],
-            "SCANNER_EXCEPTION_IDENTITY",
-            "pending scanner-exception binary differs from its exact reviewed file digest")
 
     untracked_raw = git(root, "ls-files", "--others", "--exclude-standard", "-z").stdout
     untracked = [part.decode("utf-8", "strict") for part in untracked_raw.split(b"\0") if part]
@@ -376,7 +488,9 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
         "current_source_files": len(source),
         "source_delta_paths": len(source_delta),
         "normalized_pngs": normalized_count,
-        "scanner_exception_candidates": exception["matched_units"],
+        "generated_binaries_removed": generated_binary_count,
+        "platform_resource_configs": 1,
+        "scanner_exception_candidates": 0,
         "owned_files": len(owned),
         "product_commits": len(authors),
         "remotes": len(remotes),
@@ -394,9 +508,11 @@ def run() -> None:
         f"{counts['source_blob_bytes']}/54600537 source blob bytes; "
         f"{counts['source_risks']}/1 accepted source-risk path; "
         f"{counts['current_source_files']}/406 current source paths; "
-        f"{counts['source_delta_paths']}/4 source-delta paths; "
+        f"{counts['source_delta_paths']}/8 source-delta paths; "
         f"{counts['normalized_pngs']}/4 lossless PNG normalizations; "
-        f"{counts['scanner_exception_candidates']}/1 scanner exception pending review; "
+        f"{counts['generated_binaries_removed']}/1 generated binary removed; "
+        f"{counts['platform_resource_configs']}/1 macOS-only resource config; "
+        f"{counts['scanner_exception_candidates']}/0 scanner exceptions required; "
         f"{counts['owned_files']}/4 import-control files; "
         f"{counts['product_commits']}/{counts['product_commits']} product commits "
         f"use the project identity; remotes={counts['remotes']} expected=0; "

@@ -33,9 +33,11 @@ class CuratedImportTests(unittest.TestCase):
         self.assertEqual(counts["source_blob_bytes"], 54600537)
         self.assertEqual(counts["source_risks"], 1)
         self.assertEqual(counts["current_source_files"], 406)
-        self.assertEqual(counts["source_delta_paths"], 4)
+        self.assertEqual(counts["source_delta_paths"], 8)
         self.assertEqual(counts["normalized_pngs"], 4)
-        self.assertEqual(counts["scanner_exception_candidates"], 1)
+        self.assertEqual(counts["generated_binaries_removed"], 1)
+        self.assertEqual(counts["platform_resource_configs"], 1)
+        self.assertEqual(counts["scanner_exception_candidates"], 0)
 
     def test_audio_artifact_is_risky(self) -> None:
         self.assertEqual(verify.risk_paths(["data/generations/output.wav"]),
@@ -77,9 +79,16 @@ class CuratedImportTests(unittest.TestCase):
         mutant["hygiene_delta"]["normalized_pngs"][0]["current_sha256"] = "0" * 64
         self.refusal(mutant, "HYGIENE_DELTA")
 
-    def test_scanner_exception_acceptance_is_refused(self) -> None:
+    def test_generated_binary_retention_is_refused(self) -> None:
         mutant = copy.deepcopy(self.provenance)
-        mutant["hygiene_delta"]["scanner_exception_candidate"]["disposition"] = "ACCEPTED"
+        mutant["hygiene_delta"]["generated_binary_boundary"]["head_tracked"] = True
+        self.refusal(mutant, "HYGIENE_DELTA")
+
+    def test_previous_exception_acceptance_claim_is_refused(self) -> None:
+        mutant = copy.deepcopy(self.provenance)
+        mutant["hygiene_delta"]["generated_binary_boundary"][
+            "previous_exception_accepted"
+        ] = True
         self.refusal(mutant, "HYGIENE_DELTA")
 
 

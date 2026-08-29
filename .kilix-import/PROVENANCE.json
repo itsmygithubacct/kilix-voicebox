@@ -1,6 +1,6 @@
 {
   "schema": "kilix.voicebox.curated-import/v1",
-  "status": "PREP7_CLEAN_IMPORT_CANDIDATE_NOT_P8",
+  "status": "F104CONT_CLEAN_FORK_CANDIDATE_NOT_P8",
   "upstream": {
     "url": "https://github.com/jamiepine/voicebox.git",
     "commit": "eb2cd861b19baa16720fd31747071c187c054bc5",
@@ -52,7 +52,17 @@
     }
   ],
   "hygiene_delta": {
-    "status": "PREP7_CANDIDATE_NOT_INDEPENDENTLY_ACCEPTED",
+    "status": "F104CONT_CANDIDATE_NOT_INDEPENDENTLY_ACCEPTED",
+    "changed_source_paths": [
+      ".gitignore",
+      "app/src/assets/voicebox-logo.png",
+      "tauri/assets/Voicebox_Microphone.png",
+      "tauri/assets/voicebox.icon/Assets/Voicebox.png",
+      "tauri/assets/voicebox.icon/Assets/Voicebox_Microphone.png",
+      "tauri/src-tauri/gen/Assets.car",
+      "tauri/src-tauri/tauri.conf.json",
+      "tauri/src-tauri/tauri.macos.conf.json"
+    ],
     "normalized_pngs": [
       {
         "path": "app/src/assets/voicebox-logo.png",
@@ -79,13 +89,41 @@
         "decoded_idat_sha256": "4629a315a89854acc3b4c00bc70198b719e6c9e90a401e1423b7429fe32b004a"
       }
     ],
-    "scanner_exception_candidate": {
-      "arm": "tree/PII+hosts",
+    "generated_binary_boundary": {
       "path": "tauri/src-tauri/gen/Assets.car",
-      "file_sha256": "aa87dbf86a2528b7df6118904bc8cb9af5953f63bb12393b029cccef2193b01c",
-      "matched_unit_sha256": "af732763bb717caae650c2e3f5b57992d4a87ff4cc03a61e5a05d54928ac41bd",
-      "matched_units": 1,
-      "disposition": "INDEPENDENT_REVIEW_REQUIRED_NOT_ALLOWLISTED"
+      "import_bytes": 3847048,
+      "import_sha256": "aa87dbf86a2528b7df6118904bc8cb9af5953f63bb12393b029cccef2193b01c",
+      "previous_matched_unit_sha256": "af732763bb717caae650c2e3f5b57992d4a87ff4cc03a61e5a05d54928ac41bd",
+      "previous_matched_units": 1,
+      "head_tracked": false,
+      "ignored_build_output": true,
+      "previous_exception_accepted": false,
+      "scanner_exception_required_at_head": false,
+      "gitignore": {
+        "path": ".gitignore",
+        "sha256": "86d03696b92c24545e824e09e7bf29152c510c9a476d048071f040b523689ca0",
+        "exact_rule": "tauri/src-tauri/gen/Assets.car"
+      },
+      "regenerator": {
+        "path": "tauri/src-tauri/build.rs",
+        "sha256": "f2642864caf1eb3fa50aafecf38ee37e08c3b40c28aa4ff63bbfab56d6f28fba",
+        "target_os": "macos",
+        "tool": "xcrun actool",
+        "build_executed": false
+      },
+      "resource_config": {
+        "base_path": "tauri/src-tauri/tauri.conf.json",
+        "base_sha256": "d6625a6f6fc3bd950cc2eec8df3d78b1955bf036029c6c6b59ed8e4895388386",
+        "platform_path": "tauri/src-tauri/tauri.macos.conf.json",
+        "platform_sha256": "5bda79a9e350df860da2b8261333816c19772c8c86fd63f23fd7bb49bf6b1d27",
+        "platform": "macos",
+        "resources": {
+          "gen/Assets.car": "./",
+          "gen/voicebox.icns": "./",
+          "gen/partial.plist": "./"
+        }
+      },
+      "disposition": "REMOVED_FROM_TRACKED_FORK_REGENERATED_ONLY_ON_MACOS"
     }
   }
 }
