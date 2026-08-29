@@ -7,9 +7,11 @@ import hashlib
 import json
 import os
 import re
+import struct
 import subprocess
 import sys
 import tempfile
+import zlib
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -19,6 +21,15 @@ PROVENANCE_REL = ".kilix-import/PROVENANCE.json"
 EXPECTED_SCHEMA = "kilix.voicebox.curated-import/v1"
 EXPECTED_STATUS = "PREP7_CLEAN_IMPORT_CANDIDATE_NOT_P8"
 EXPECTED_IDENTITY = "itsmygithubacct <itsmygithubacct@users.noreply.github.com>"
+EXPECTED_IMPORT_COMMIT = "08e763fa8f734fe519b14cf6e9810404a7aa2617"
+EXPECTED_IMPORT_TREE = "57f4545ddb5b163b0df8429b0fb12de66d905ebd"
+EXPECTED_CONTROL_PATHS = [
+    ".kilix-import/PROVENANCE.json",
+    ".kilix-import/README.md",
+    ".kilix-import/test_verify_import.py",
+    ".kilix-import/verify_import.py",
+]
+PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 RISK_PATTERN = re.compile(
     r"(^|/)(\.venv|venv|env|node_modules|target|dist|build|\.cache)(/|$)"
     r"|(^|/)(data|assets|samples?|tests?/data)/"
@@ -86,6 +97,9 @@ def validate_provenance(provenance: dict[str, Any]) -> None:
         "source": "ACCEPTED_CLEAN_GIT_OBJECT_ONLY",
         "method": "GIT_ARCHIVE_EXACT_COMMIT",
         "owned_prefix": OWNED_PREFIX,
+        "product_snapshot_commit": EXPECTED_IMPORT_COMMIT,
+        "product_snapshot_tree": EXPECTED_IMPORT_TREE,
+        "control_paths": EXPECTED_CONTROL_PATHS,
         "upstream_history_imported": False,
         "dirty_prototype_read": False,
         "dirty_prototype_copied": False,
@@ -105,24 +119,62 @@ def validate_provenance(provenance: dict[str, Any]) -> None:
         "sha256": "f9a52f9892c0566ac33e11849185f1cc470edb16c4a7427f0aa8fe83e2175e39",
         "disposition": "EMPTY_CACHE_PLACEHOLDER_NOT_GENERATED_MATERIAL",
     }], "RISK_AUTHORITY", "accepted source-risk population differs from 1/1")
+    hygiene_delta = provenance.get("hygiene_delta", {})
+    require(hygiene_delta == {
+        "status": "PREP7_CANDIDATE_NOT_INDEPENDENTLY_ACCEPTED",
+        "normalized_pngs": [
+            {
+                "path": "app/src/assets/voicebox-logo.png",
+                "import_sha256": "c688271d63dbcf0e10e7268b9184ca12c2b34ce6b1d9f20b348e2e9f8930bca5",
+                "current_sha256": "e0bfce322d08419ed2d5c0f8a46a86ea43f6db5589164b921c42a61aa2b26e54",
+                "decoded_idat_sha256": "4629a315a89854acc3b4c00bc70198b719e6c9e90a401e1423b7429fe32b004a",
+            },
+            {
+                "path": "tauri/assets/Voicebox_Microphone.png",
+                "import_sha256": "f41af2e7f1ea333c1665e8c0d057d76d0c24c39ebe2a9fe3afcd1b27cbc9e6c4",
+                "current_sha256": "5aa3e154c49d129508e7833f44985e6b79c4b820b7404ada19d4067fa5f990d2",
+                "decoded_idat_sha256": "4629a315a89854acc3b4c00bc70198b719e6c9e90a401e1423b7429fe32b004a",
+            },
+            {
+                "path": "tauri/assets/voicebox.icon/Assets/Voicebox.png",
+                "import_sha256": "c688271d63dbcf0e10e7268b9184ca12c2b34ce6b1d9f20b348e2e9f8930bca5",
+                "current_sha256": "e0bfce322d08419ed2d5c0f8a46a86ea43f6db5589164b921c42a61aa2b26e54",
+                "decoded_idat_sha256": "4629a315a89854acc3b4c00bc70198b719e6c9e90a401e1423b7429fe32b004a",
+            },
+            {
+                "path": "tauri/assets/voicebox.icon/Assets/Voicebox_Microphone.png",
+                "import_sha256": "f41af2e7f1ea333c1665e8c0d057d76d0c24c39ebe2a9fe3afcd1b27cbc9e6c4",
+                "current_sha256": "5aa3e154c49d129508e7833f44985e6b79c4b820b7404ada19d4067fa5f990d2",
+                "decoded_idat_sha256": "4629a315a89854acc3b4c00bc70198b719e6c9e90a401e1423b7429fe32b004a",
+            },
+        ],
+        "scanner_exception_candidate": {
+            "arm": "tree/PII+hosts",
+            "path": "tauri/src-tauri/gen/Assets.car",
+            "file_sha256": "aa87dbf86a2528b7df6118904bc8cb9af5953f63bb12393b029cccef2193b01c",
+            "matched_unit_sha256": "af732763bb717caae650c2e3f5b57992d4a87ff4cc03a61e5a05d54928ac41bd",
+            "matched_units": 1,
+            "disposition": "INDEPENDENT_REVIEW_REQUIRED_NOT_ALLOWLISTED",
+        },
+    }, "HYGIENE_DELTA", "hygiene delta or pending exception drifted")
 
 
 def risk_paths(paths: Iterable[str]) -> list[str]:
     return sorted(path for path in paths if RISK_PATTERN.search(path))
 
 
-def tracked_paths(root: Path) -> list[str]:
-    raw = git(root, "ls-files", "-z").stdout
+def tracked_paths(root: Path, revision: str = "HEAD") -> list[str]:
+    raw = git(root, "ls-tree", "-r", "--name-only", "-z", revision).stdout
     return [part.decode("utf-8", "strict") for part in raw.split(b"\0") if part]
 
 
-def source_tree(root: Path, owned_paths: list[str]) -> str:
+def source_tree(root: Path, owned_paths: list[str], revision: str = "HEAD") -> str:
     scratch_root = os.environ.get("TMPDIR")
     with tempfile.TemporaryDirectory(prefix="voicebox-import-", dir=scratch_root) as temporary:
         index_path = str(Path(temporary) / "index")
         environment = os.environ.copy()
         environment["GIT_INDEX_FILE"] = index_path
-        git(root, "read-tree", "HEAD", env=environment)
+        git(root, "read-tree", revision, env=environment)
         for path in owned_paths:
             git(root, "update-index", "--force-remove", "--", path, env=environment)
         return git(root, "write-tree", env=environment).stdout.decode("ascii").strip()
@@ -153,32 +205,133 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def sha256_bytes(content: bytes) -> str:
+    return hashlib.sha256(content).hexdigest()
+
+
+def git_blob(root: Path, revision: str, path: str) -> bytes:
+    return git(root, "show", f"{revision}:{path}").stdout
+
+
+def png_chunks(content: bytes) -> list[tuple[bytes, bytes]]:
+    require(content.startswith(PNG_SIGNATURE), "PNG_SIGNATURE", "hygiene delta is not PNG data")
+    chunks: list[tuple[bytes, bytes]] = []
+    offset = len(PNG_SIGNATURE)
+    while offset < len(content):
+        require(offset + 12 <= len(content), "PNG_TRUNCATED", "PNG chunk header is truncated")
+        length = struct.unpack(">I", content[offset:offset + 4])[0]
+        end = offset + 12 + length
+        require(end <= len(content), "PNG_TRUNCATED", "PNG chunk payload is truncated")
+        kind = content[offset + 4:offset + 8]
+        payload = content[offset + 8:offset + 8 + length]
+        expected_crc = struct.unpack(">I", content[offset + 8 + length:end])[0]
+        require(zlib.crc32(kind + payload) & 0xffffffff == expected_crc,
+                "PNG_CRC", "PNG chunk checksum drifted")
+        chunks.append((kind, payload))
+        offset = end
+    require(offset == len(content) and chunks and chunks[-1][0] == b"IEND",
+            "PNG_STRUCTURE", "PNG structure is incomplete")
+    return chunks
+
+
+def decoded_idat(chunks: list[tuple[bytes, bytes]]) -> bytes:
+    compressed = b"".join(payload for kind, payload in chunks if kind == b"IDAT")
+    require(bool(compressed), "PNG_IDAT", "PNG contains no IDAT payload")
+    try:
+        return zlib.decompress(compressed)
+    except zlib.error as error:
+        raise ImportErrorDetail("PNG_IDAT", f"PNG IDAT stream is invalid: {error}") from error
+
+
+def verify_png_normalization(root: Path, import_commit: str,
+                             rows: list[dict[str, Any]]) -> int:
+    for row in rows:
+        path = row["path"]
+        imported = git_blob(root, import_commit, path)
+        current = (root / path).read_bytes()
+        require(sha256_bytes(imported) == row["import_sha256"],
+                "PNG_IMPORT_IDENTITY", f"imported PNG identity drifted: {path}")
+        require(sha256_bytes(current) == row["current_sha256"],
+                "PNG_CURRENT_IDENTITY", f"normalized PNG identity drifted: {path}")
+        imported_chunks = png_chunks(imported)
+        current_chunks = png_chunks(current)
+        imported_non_idat = [(kind, payload) for kind, payload in imported_chunks
+                             if kind != b"IDAT"]
+        current_non_idat = [(kind, payload) for kind, payload in current_chunks
+                            if kind != b"IDAT"]
+        require(imported_non_idat == current_non_idat, "PNG_METADATA_DRIFT",
+                f"non-IDAT PNG chunks changed: {path}")
+        imported_idat = decoded_idat(imported_chunks)
+        current_idat = decoded_idat(current_chunks)
+        require(imported_idat == current_idat, "PNG_DECODED_DRIFT",
+                f"decoded PNG scanlines changed: {path}")
+        require(sha256_bytes(current_idat) == row["decoded_idat_sha256"],
+                "PNG_DECODED_IDENTITY", f"decoded PNG identity drifted: {path}")
+    return len(rows)
+
+
 def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[str, int]:
     status = git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all").stdout
     require(status == b"", "WORKTREE_NOT_CLEAN",
             "exact import verification requires a clean tracked and untracked worktree")
 
-    paths = tracked_paths(root)
-    owned = sorted(path for path in paths if path.startswith(OWNED_PREFIX))
-    source = sorted(path for path in paths if not path.startswith(OWNED_PREFIX))
-    require(bool(owned), "OWNED_POPULATION", "curated import metadata is absent")
-    observed_tree = source_tree(root, owned)
+    import_commit = provenance["import"]["product_snapshot_commit"]
+    root_commits = sorted(line for line in git(
+        root, "rev-list", "--max-parents=0", "--all"
+    ).stdout.decode("ascii").splitlines() if line)
+    require(root_commits == [import_commit], "IMPORT_ROOT",
+            "product history does not have the exact 1/1 curated-import root")
+    import_tree = git(root, "rev-parse", f"{import_commit}^{{tree}}").stdout.decode("ascii").strip()
+    require(import_tree == provenance["import"]["product_snapshot_tree"],
+            "IMPORT_PRODUCT_TREE", "curated product snapshot tree drifted")
+
+    import_paths = tracked_paths(root, import_commit)
+    import_owned = sorted(path for path in import_paths if path.startswith(OWNED_PREFIX))
+    import_source = sorted(path for path in import_paths if not path.startswith(OWNED_PREFIX))
+    require(import_owned == provenance["import"]["control_paths"], "IMPORT_CONTROL_PATHS",
+            "curated import control population differs from 4/4")
+    observed_tree = source_tree(root, import_owned, import_commit)
     expected = provenance["upstream"]
     require(observed_tree == expected["tree"], "SOURCE_TREE_MISMATCH",
             f"source tree {observed_tree} differs from accepted {expected['tree']}")
 
     tree_paths, blob_bytes = tree_population(root, observed_tree)
-    require(tree_paths == source, "SOURCE_PATH_MISMATCH",
-            "source path population differs from reconstructed tree")
-    require(len(source) == expected["tracked_files"], "SOURCE_FILE_COUNT",
-            f"source file population is {len(source)}/406")
+    require(tree_paths == import_source, "SOURCE_PATH_MISMATCH",
+            "import source path population differs from reconstructed tree")
+    require(len(import_source) == expected["tracked_files"], "SOURCE_FILE_COUNT",
+            f"import source file population is {len(import_source)}/406")
     require(blob_bytes == expected["tracked_blob_bytes"], "SOURCE_BYTE_COUNT",
-            f"source blob population is {blob_bytes}/54600537 bytes")
+            f"import source blob population is {blob_bytes}/54600537 bytes")
 
-    risks = risk_paths(source)
+    import_risks = risk_paths(import_source)
     expected_risk_paths = [row["path"] for row in provenance["expected_source_risks"]]
-    require(risks == expected_risk_paths, "SOURCE_RISK_POPULATION",
-            f"source risk population differs from expected 1/1: {risks!r}")
+    require(import_risks == expected_risk_paths, "SOURCE_RISK_POPULATION",
+            f"import source risk population differs from expected 1/1: {import_risks!r}")
+
+    current_paths = tracked_paths(root)
+    owned = sorted(path for path in current_paths if path.startswith(OWNED_PREFIX))
+    source = sorted(path for path in current_paths if not path.startswith(OWNED_PREFIX))
+    require(owned == provenance["import"]["control_paths"], "OWNED_POPULATION",
+            "current import control population differs from 4/4")
+    require(source == import_source, "CURRENT_SOURCE_PATHS",
+            "current source path population differs from the 406/406 imported paths")
+    source_delta_raw = git(
+        root, "diff", "--name-only", "-z", import_commit, "HEAD", "--"
+    ).stdout
+    source_delta = sorted(
+        part.decode("utf-8", "strict")
+        for part in source_delta_raw.split(b"\0")
+        if part and not part.decode("utf-8", "strict").startswith(OWNED_PREFIX)
+    )
+    normalized_rows = provenance["hygiene_delta"]["normalized_pngs"]
+    expected_delta = sorted(row["path"] for row in normalized_rows)
+    require(source_delta == expected_delta, "CURRENT_SOURCE_DELTA",
+            "current source delta differs from the 4/4 reviewed PNG paths")
+    normalized_count = verify_png_normalization(root, import_commit, normalized_rows)
+
+    current_risks = risk_paths(source)
+    require(current_risks == expected_risk_paths, "CURRENT_RISK_POPULATION",
+            f"current source risk population differs from expected 1/1: {current_risks!r}")
     risk = provenance["expected_source_risks"][0]
     risk_path = root / risk["path"]
     require(risk_path.stat().st_size == risk["bytes"]
@@ -188,6 +341,11 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
     licence_path = root / expected["licence_path"]
     require(sha256_file(licence_path) == expected["licence_sha256"],
             "LICENCE_IDENTITY", "upstream MIT licence bytes drifted")
+
+    exception = provenance["hygiene_delta"]["scanner_exception_candidate"]
+    require(sha256_file(root / exception["path"]) == exception["file_sha256"],
+            "SCANNER_EXCEPTION_IDENTITY",
+            "pending scanner-exception binary differs from its exact reviewed file digest")
 
     untracked_raw = git(root, "ls-files", "--others", "--exclude-standard", "-z").stdout
     untracked = [part.decode("utf-8", "strict") for part in untracked_raw.split(b"\0") if part]
@@ -212,9 +370,13 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
             "COMMITTER_IDENTITY", "one or more product committers use a non-project identity")
 
     return {
-        "source_files": len(source),
+        "source_files": len(import_source),
         "source_blob_bytes": blob_bytes,
-        "source_risks": len(risks),
+        "source_risks": len(import_risks),
+        "current_source_files": len(source),
+        "source_delta_paths": len(source_delta),
+        "normalized_pngs": normalized_count,
+        "scanner_exception_candidates": exception["matched_units"],
         "owned_files": len(owned),
         "product_commits": len(authors),
         "remotes": len(remotes),
@@ -231,7 +393,11 @@ def run() -> None:
         f"({counts['source_files']}/406 source files; "
         f"{counts['source_blob_bytes']}/54600537 source blob bytes; "
         f"{counts['source_risks']}/1 accepted source-risk path; "
-        f"{counts['owned_files']}/{counts['owned_files']} import-control files; "
+        f"{counts['current_source_files']}/406 current source paths; "
+        f"{counts['source_delta_paths']}/4 source-delta paths; "
+        f"{counts['normalized_pngs']}/4 lossless PNG normalizations; "
+        f"{counts['scanner_exception_candidates']}/1 scanner exception pending review; "
+        f"{counts['owned_files']}/4 import-control files; "
         f"{counts['product_commits']}/{counts['product_commits']} product commits "
         f"use the project identity; remotes={counts['remotes']} expected=0; "
         "upstream-history commits=0 expected=0)"

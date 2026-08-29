@@ -32,6 +32,10 @@ class CuratedImportTests(unittest.TestCase):
         self.assertEqual(counts["source_files"], 406)
         self.assertEqual(counts["source_blob_bytes"], 54600537)
         self.assertEqual(counts["source_risks"], 1)
+        self.assertEqual(counts["current_source_files"], 406)
+        self.assertEqual(counts["source_delta_paths"], 4)
+        self.assertEqual(counts["normalized_pngs"], 4)
+        self.assertEqual(counts["scanner_exception_candidates"], 1)
 
     def test_audio_artifact_is_risky(self) -> None:
         self.assertEqual(verify.risk_paths(["data/generations/output.wav"]),
@@ -62,6 +66,21 @@ class CuratedImportTests(unittest.TestCase):
         mutant = copy.deepcopy(self.provenance)
         mutant["import"]["remote_population_expected"] = 1
         self.refusal(mutant, "IMPORT_BOUNDARY")
+
+    def test_product_snapshot_mutation_is_refused(self) -> None:
+        mutant = copy.deepcopy(self.provenance)
+        mutant["import"]["product_snapshot_commit"] = "0" * 40
+        self.refusal(mutant, "IMPORT_BOUNDARY")
+
+    def test_png_identity_mutation_is_refused(self) -> None:
+        mutant = copy.deepcopy(self.provenance)
+        mutant["hygiene_delta"]["normalized_pngs"][0]["current_sha256"] = "0" * 64
+        self.refusal(mutant, "HYGIENE_DELTA")
+
+    def test_scanner_exception_acceptance_is_refused(self) -> None:
+        mutant = copy.deepcopy(self.provenance)
+        mutant["hygiene_delta"]["scanner_exception_candidate"]["disposition"] = "ACCEPTED"
+        self.refusal(mutant, "HYGIENE_DELTA")
 
 
 if __name__ == "__main__":
