@@ -1,6 +1,6 @@
 {
   "schema": "kilix.voicebox.curated-import/v1",
-  "status": "F104CONT_CLEAN_FORK_CANDIDATE_NOT_P8",
+  "status": "F104CONT2_IMPORT_HYGIENE_PROOF_CANDIDATE_NOT_P8",
   "upstream": {
     "url": "https://github.com/jamiepine/voicebox.git",
     "commit": "eb2cd861b19baa16720fd31747071c187c054bc5",
@@ -52,7 +52,7 @@
     }
   ],
   "hygiene_delta": {
-    "status": "F104CONT_CANDIDATE_NOT_INDEPENDENTLY_ACCEPTED",
+    "status": "F104CONT2_CANDIDATE_NOT_INDEPENDENTLY_ACCEPTED",
     "changed_source_paths": [
       ".gitignore",
       "app/src/assets/voicebox-logo.png",
@@ -99,6 +99,62 @@
       "ignored_build_output": true,
       "previous_exception_accepted": false,
       "scanner_exception_required_at_head": false,
+      "historical_match_proof": {
+        "status": "MEASURED_NOT_ADJUDICATED",
+        "independent_adjudications": 0,
+        "required_independent_adjudications": 1,
+        "scanner_arm": "tree/PII+hosts",
+        "scanner_unit_kind": "BINARY_PATH",
+        "scanner_unit_sha256": "af732763bb717caae650c2e3f5b57992d4a87ff4cc03a61e5a05d54928ac41bd",
+        "pattern_encoding": "HEX",
+        "pattern_hex": "703530",
+        "match_semantics": "ASCII_CASE_INSENSITIVE_WORD",
+        "matches": [
+          {
+            "offset": 694170,
+            "matched_hex": "703530",
+            "left_byte_hex": "04",
+            "right_byte_hex": "80",
+            "context": {
+              "before_bytes": 32,
+              "after_bytes": 32,
+              "start_offset": 694138,
+              "end_offset_exclusive": 694205,
+              "bytes": 67,
+              "distinct_byte_values": 56,
+              "sha256": "e2800fa5fe50fceb211b4ffc51593b46e470831d4d7ea5b6c56ff1e36bf594ee"
+            },
+            "printable_run": {
+              "start_offset": 694170,
+              "end_offset_exclusive": 694173,
+              "bytes": 3,
+              "hex": "703530",
+              "sha256": "875636a511dab3de413499a61ca1d7ac1fdd97a6e38d8010b03b9552de840830"
+            }
+          }
+        ],
+        "generator_inputs": [
+          {
+            "path": "tauri/assets/voicebox.icon/Assets/Voicebox.png",
+            "bytes": 4245540,
+            "sha256": "c688271d63dbcf0e10e7268b9184ca12c2b34ce6b1d9f20b348e2e9f8930bca5",
+            "matches": 0
+          },
+          {
+            "path": "tauri/assets/voicebox.icon/Assets/Voicebox_Microphone.png",
+            "bytes": 4244260,
+            "sha256": "f41af2e7f1ea333c1665e8c0d057d76d0c24c39ebe2a9fe3afcd1b27cbc9e6c4",
+            "matches": 0
+          },
+          {
+            "path": "tauri/assets/voicebox.icon/icon.json",
+            "bytes": 556,
+            "sha256": "6d8cbed93e877993a3b501d094d16616664a6bdbfdc82b16cfb47abc8dacce01",
+            "matches": 0
+          }
+        ],
+        "generator_input_bytes": 8490356
+      },
       "gitignore": {
         "path": ".gitignore",
         "sha256": "86d03696b92c24545e824e09e7bf29152c510c9a476d048071f040b523689ca0",

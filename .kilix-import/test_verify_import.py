@@ -36,8 +36,44 @@ class CuratedImportTests(unittest.TestCase):
         self.assertEqual(counts["source_delta_paths"], 8)
         self.assertEqual(counts["normalized_pngs"], 4)
         self.assertEqual(counts["generated_binaries_removed"], 1)
+        self.assertEqual(counts["historical_binary_units"], 1)
+        self.assertEqual(counts["historical_matches"], 1)
+        self.assertEqual(counts["generator_inputs"], 3)
+        self.assertEqual(counts["generator_input_bytes"], 8490356)
+        self.assertEqual(counts["matched_generator_inputs"], 0)
+        self.assertEqual(counts["generator_input_matches"], 0)
+        self.assertEqual(counts["historical_adjudications"], 0)
         self.assertEqual(counts["platform_resource_configs"], 1)
         self.assertEqual(counts["scanner_exception_candidates"], 0)
+
+    def test_historical_match_measurement_is_reproducible(self) -> None:
+        boundary = self.provenance["hygiene_delta"]["generated_binary_boundary"]
+        imported = verify.git_blob(
+            self.root,
+            self.provenance["import"]["product_snapshot_commit"],
+            boundary["path"],
+        )
+        counts = verify.verify_historical_match_proof(
+            self.root,
+            self.provenance["import"]["product_snapshot_commit"],
+            boundary["path"],
+            imported,
+            boundary["historical_match_proof"],
+        )
+        self.assertEqual(counts, {
+            "historical_binary_units": 1,
+            "historical_matches": 1,
+            "generator_inputs": 3,
+            "generator_input_bytes": 8490356,
+            "matched_generator_inputs": 0,
+            "generator_input_matches": 0,
+            "historical_adjudications": 0,
+        })
+
+    def test_ascii_word_matching_requires_boundaries(self) -> None:
+        token = bytes.fromhex("703530")
+        content = b"x" + token + b" " + bytes.fromhex("503530") + b"\x00"
+        self.assertEqual(verify.ascii_word_match_offsets(content, "703530"), [5])
 
     def test_audio_artifact_is_risky(self) -> None:
         self.assertEqual(verify.risk_paths(["data/generations/output.wav"]),
@@ -89,6 +125,22 @@ class CuratedImportTests(unittest.TestCase):
         mutant["hygiene_delta"]["generated_binary_boundary"][
             "previous_exception_accepted"
         ] = True
+        self.refusal(mutant, "HYGIENE_DELTA")
+
+    def test_historical_offset_mutation_is_refused(self) -> None:
+        mutant = copy.deepcopy(self.provenance)
+        mutant["hygiene_delta"]["generated_binary_boundary"][
+            "historical_match_proof"
+        ]["matches"][0]["offset"] += 1
+        self.refusal(mutant, "HYGIENE_DELTA")
+
+    def test_historical_adjudication_claim_is_refused(self) -> None:
+        mutant = copy.deepcopy(self.provenance)
+        proof = mutant["hygiene_delta"]["generated_binary_boundary"][
+            "historical_match_proof"
+        ]
+        proof["status"] = "ADJUDICATED"
+        proof["independent_adjudications"] = 1
         self.refusal(mutant, "HYGIENE_DELTA")
 
 

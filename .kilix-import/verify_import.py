@@ -19,7 +19,7 @@ from typing import Any, Iterable
 OWNED_PREFIX = ".kilix-import/"
 PROVENANCE_REL = ".kilix-import/PROVENANCE.json"
 EXPECTED_SCHEMA = "kilix.voicebox.curated-import/v1"
-EXPECTED_STATUS = "F104CONT_CLEAN_FORK_CANDIDATE_NOT_P8"
+EXPECTED_STATUS = "F104CONT2_IMPORT_HYGIENE_PROOF_CANDIDATE_NOT_P8"
 EXPECTED_IDENTITY = "itsmygithubacct <itsmygithubacct@users.noreply.github.com>"
 EXPECTED_IMPORT_COMMIT = "08e763fa8f734fe519b14cf6e9810404a7aa2617"
 EXPECTED_IMPORT_TREE = "57f4545ddb5b163b0df8429b0fb12de66d905ebd"
@@ -29,6 +29,62 @@ EXPECTED_CONTROL_PATHS = [
     ".kilix-import/test_verify_import.py",
     ".kilix-import/verify_import.py",
 ]
+EXPECTED_HISTORICAL_MATCH_PROOF = {
+    "status": "MEASURED_NOT_ADJUDICATED",
+    "independent_adjudications": 0,
+    "required_independent_adjudications": 1,
+    "scanner_arm": "tree/PII+hosts",
+    "scanner_unit_kind": "BINARY_PATH",
+    "scanner_unit_sha256": "af732763bb717caae650c2e3f5b57992d4a87ff4cc03a61e5a05d54928ac41bd",
+    "pattern_encoding": "HEX",
+    "pattern_hex": "703530",
+    "match_semantics": "ASCII_CASE_INSENSITIVE_WORD",
+    "matches": [
+        {
+            "offset": 694170,
+            "matched_hex": "703530",
+            "left_byte_hex": "04",
+            "right_byte_hex": "80",
+            "context": {
+                "before_bytes": 32,
+                "after_bytes": 32,
+                "start_offset": 694138,
+                "end_offset_exclusive": 694205,
+                "bytes": 67,
+                "distinct_byte_values": 56,
+                "sha256": "e2800fa5fe50fceb211b4ffc51593b46e470831d4d7ea5b6c56ff1e36bf594ee",
+            },
+            "printable_run": {
+                "start_offset": 694170,
+                "end_offset_exclusive": 694173,
+                "bytes": 3,
+                "hex": "703530",
+                "sha256": "875636a511dab3de413499a61ca1d7ac1fdd97a6e38d8010b03b9552de840830",
+            },
+        }
+    ],
+    "generator_inputs": [
+        {
+            "path": "tauri/assets/voicebox.icon/Assets/Voicebox.png",
+            "bytes": 4245540,
+            "sha256": "c688271d63dbcf0e10e7268b9184ca12c2b34ce6b1d9f20b348e2e9f8930bca5",
+            "matches": 0,
+        },
+        {
+            "path": "tauri/assets/voicebox.icon/Assets/Voicebox_Microphone.png",
+            "bytes": 4244260,
+            "sha256": "f41af2e7f1ea333c1665e8c0d057d76d0c24c39ebe2a9fe3afcd1b27cbc9e6c4",
+            "matches": 0,
+        },
+        {
+            "path": "tauri/assets/voicebox.icon/icon.json",
+            "bytes": 556,
+            "sha256": "6d8cbed93e877993a3b501d094d16616664a6bdbfdc82b16cfb47abc8dacce01",
+            "matches": 0,
+        },
+    ],
+    "generator_input_bytes": 8490356,
+}
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 RISK_PATTERN = re.compile(
     r"(^|/)(\.venv|venv|env|node_modules|target|dist|build|\.cache)(/|$)"
@@ -121,7 +177,7 @@ def validate_provenance(provenance: dict[str, Any]) -> None:
     }], "RISK_AUTHORITY", "accepted source-risk population differs from 1/1")
     hygiene_delta = provenance.get("hygiene_delta", {})
     require(hygiene_delta == {
-        "status": "F104CONT_CANDIDATE_NOT_INDEPENDENTLY_ACCEPTED",
+        "status": "F104CONT2_CANDIDATE_NOT_INDEPENDENTLY_ACCEPTED",
         "changed_source_paths": [
             ".gitignore",
             "app/src/assets/voicebox-logo.png",
@@ -168,6 +224,7 @@ def validate_provenance(provenance: dict[str, Any]) -> None:
             "ignored_build_output": True,
             "previous_exception_accepted": False,
             "scanner_exception_required_at_head": False,
+            "historical_match_proof": EXPECTED_HISTORICAL_MATCH_PROOF,
             "gitignore": {
                 "path": ".gitignore",
                 "sha256": "86d03696b92c24545e824e09e7bf29152c510c9a476d048071f040b523689ca0",
@@ -308,14 +365,117 @@ def verify_png_normalization(root: Path, import_commit: str,
     return len(rows)
 
 
+def ascii_word_match_offsets(content: bytes, pattern_hex: str) -> list[int]:
+    """Return case-insensitive ASCII word matches without storing the token as text."""
+
+    token = bytes.fromhex(pattern_hex)
+    require(bool(token) and all(byte < 128 for byte in token),
+            "HISTORICAL_PATTERN", "historical scanner pattern is not non-empty ASCII")
+    pattern = re.compile(rb"\b" + re.escape(token) + rb"\b", re.IGNORECASE | re.ASCII)
+    return [match.start() for match in pattern.finditer(content)]
+
+
+def verify_historical_match_proof(root: Path, import_commit: str,
+                                  path: str, imported: bytes,
+                                  proof: dict[str, Any]) -> dict[str, int]:
+    """Reproduce the historical match while leaving its adjudication external."""
+
+    require(proof == EXPECTED_HISTORICAL_MATCH_PROOF, "HISTORICAL_PROOF",
+            "historical match proof or its non-adjudicated status drifted")
+    require(proof["status"] == "MEASURED_NOT_ADJUDICATED"
+            and proof["independent_adjudications"] == 0
+            and proof["required_independent_adjudications"] == 1,
+            "HISTORICAL_ADJUDICATION",
+            "historical content must retain the exact 0/1 independent adjudication state")
+
+    scanner_unit = b"BINARY:" + path.encode("utf-8")
+    require(sha256_bytes(scanner_unit) == proof["scanner_unit_sha256"],
+            "HISTORICAL_SCANNER_UNIT", "historical scanner-unit identity drifted")
+    token = bytes.fromhex(proof["pattern_hex"])
+    offsets = ascii_word_match_offsets(imported, proof["pattern_hex"])
+    expected_offsets = [row["offset"] for row in proof["matches"]]
+    require(offsets == expected_offsets, "HISTORICAL_MATCH_POPULATION",
+            "historical binary match population or offsets drifted")
+
+    for row in proof["matches"]:
+        offset = row["offset"]
+        match_end = offset + len(token)
+        require(imported[offset:match_end].hex() == row["matched_hex"],
+                "HISTORICAL_MATCH_BYTES", "historical matched bytes drifted")
+        require(imported[offset - 1:offset].hex() == row["left_byte_hex"]
+                and imported[match_end:match_end + 1].hex() == row["right_byte_hex"],
+                "HISTORICAL_ADJACENCY", "historical match adjacency drifted")
+
+        context = row["context"]
+        context_start = max(0, offset - context["before_bytes"])
+        context_end = min(len(imported), match_end + context["after_bytes"])
+        context_bytes = imported[context_start:context_end]
+        require(context_start == context["start_offset"]
+                and context_end == context["end_offset_exclusive"]
+                and len(context_bytes) == context["bytes"],
+                "HISTORICAL_CONTEXT_BOUNDARY", "historical context boundary drifted")
+        require(len(set(context_bytes)) == context["distinct_byte_values"]
+                and sha256_bytes(context_bytes) == context["sha256"],
+                "HISTORICAL_CONTEXT_IDENTITY", "historical context identity drifted")
+
+        run_start = offset
+        while run_start > 0 and 32 <= imported[run_start - 1] <= 126:
+            run_start -= 1
+        run_end = match_end
+        while run_end < len(imported) and 32 <= imported[run_end] <= 126:
+            run_end += 1
+        run_bytes = imported[run_start:run_end]
+        printable_run = row["printable_run"]
+        require(run_start == printable_run["start_offset"]
+                and run_end == printable_run["end_offset_exclusive"]
+                and len(run_bytes) == printable_run["bytes"],
+                "HISTORICAL_PRINTABLE_BOUNDARY",
+                "historical printable-run boundary drifted")
+        require(run_bytes.hex() == printable_run["hex"]
+                and sha256_bytes(run_bytes) == printable_run["sha256"],
+                "HISTORICAL_PRINTABLE_IDENTITY",
+                "historical printable-run identity drifted")
+
+    input_bytes = 0
+    matched_inputs = 0
+    input_matches = 0
+    for row in proof["generator_inputs"]:
+        content = git_blob(root, import_commit, row["path"])
+        offsets = ascii_word_match_offsets(content, proof["pattern_hex"])
+        require(len(content) == row["bytes"]
+                and sha256_bytes(content) == row["sha256"],
+                "GENERATOR_INPUT_IDENTITY",
+                f"historical generator input identity drifted: {row['path']}")
+        require(len(offsets) == row["matches"], "GENERATOR_INPUT_MATCHES",
+                f"historical generator input match population drifted: {row['path']}")
+        input_bytes += len(content)
+        input_matches += len(offsets)
+        matched_inputs += int(bool(offsets))
+    require(input_bytes == proof["generator_input_bytes"],
+            "GENERATOR_INPUT_BYTES", "historical generator-input byte population drifted")
+
+    return {
+        "historical_binary_units": 1,
+        "historical_matches": len(proof["matches"]),
+        "generator_inputs": len(proof["generator_inputs"]),
+        "generator_input_bytes": input_bytes,
+        "matched_generator_inputs": matched_inputs,
+        "generator_input_matches": input_matches,
+        "historical_adjudications": proof["independent_adjudications"],
+    }
+
+
 def verify_generated_binary_boundary(root: Path, import_commit: str,
-                                     boundary: dict[str, Any]) -> int:
+                                     boundary: dict[str, Any]) -> dict[str, int]:
     path = boundary["path"]
     imported = git_blob(root, import_commit, path)
     require(len(imported) == boundary["import_bytes"],
             "GENERATED_IMPORT_SIZE", "imported generated binary size drifted")
     require(sha256_bytes(imported) == boundary["import_sha256"],
             "GENERATED_IMPORT_IDENTITY", "imported generated binary identity drifted")
+    historical_counts = verify_historical_match_proof(
+        root, import_commit, path, imported, boundary["historical_match_proof"]
+    )
     require(not (root / path).exists(), "GENERATED_BINARY_PRESENT",
             "generated binary must not be stored in the current fork tree")
 
@@ -377,7 +537,7 @@ def verify_generated_binary_boundary(root: Path, import_commit: str,
     )
     require(absent_at_import.returncode != 0, "PLATFORM_CONFIG_PREEXISTED",
             "macOS split config unexpectedly existed in the immutable import root")
-    return 1
+    return {"generated_binaries_removed": 1, **historical_counts}
 
 
 def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[str, int]:
@@ -442,7 +602,7 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
     require(source_delta == expected_delta, "CURRENT_SOURCE_DELTA",
             "current source delta differs from the exact 8/8 bounded paths")
     normalized_count = verify_png_normalization(root, import_commit, normalized_rows)
-    generated_binary_count = verify_generated_binary_boundary(
+    generated_binary_counts = verify_generated_binary_boundary(
         root, import_commit, binary_boundary
     )
 
@@ -488,7 +648,7 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
         "current_source_files": len(source),
         "source_delta_paths": len(source_delta),
         "normalized_pngs": normalized_count,
-        "generated_binaries_removed": generated_binary_count,
+        **generated_binary_counts,
         "platform_resource_configs": 1,
         "scanner_exception_candidates": 0,
         "owned_files": len(owned),
@@ -511,6 +671,12 @@ def run() -> None:
         f"{counts['source_delta_paths']}/8 source-delta paths; "
         f"{counts['normalized_pngs']}/4 lossless PNG normalizations; "
         f"{counts['generated_binaries_removed']}/1 generated binary removed; "
+        f"{counts['historical_binary_units']}/1 historical binary unit reproduced; "
+        f"{counts['historical_matches']}/1 historical word match reproduced; "
+        f"{counts['generator_inputs']}/3 generator inputs measured; "
+        f"{counts['generator_input_bytes']}/8490356 generator-input bytes measured; "
+        f"{counts['matched_generator_inputs']}/3 generator inputs matched; "
+        f"{counts['historical_adjudications']}/1 independent historical adjudications; "
         f"{counts['platform_resource_configs']}/1 macOS-only resource config; "
         f"{counts['scanner_exception_candidates']}/0 scanner exceptions required; "
         f"{counts['owned_files']}/4 import-control files; "
