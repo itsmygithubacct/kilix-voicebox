@@ -1,0 +1,46 @@
+{
+  "schema": "kilix.voicebox.curated-import/v1",
+  "status": "PREP7_CLEAN_IMPORT_CANDIDATE_NOT_P8",
+  "upstream": {
+    "url": "https://github.com/jamiepine/voicebox.git",
+    "commit": "eb2cd861b19baa16720fd31747071c187c054bc5",
+    "tree": "d047f7de60574c99815ddd8179a3b5a079cb2567",
+    "archive_sha256": "7ed3d1fdfa0aa56c4d3ac353169b1e7d56664ac9b34277794bf95439c8c33eb4",
+    "tracked_files": 406,
+    "tracked_blob_bytes": 54600537,
+    "licence_path": "LICENSE",
+    "licence_sha256": "5d515f5a28ec4b8028c2b7410ad3bb338b9d3a73dd187f9c0fc720e01e387547"
+  },
+  "accepted_evidence": [
+    {
+      "document": "0.2.1-F104-P0-SOURCE-HYGIENE-R1.md",
+      "sha256": "356cd24e112c593b25747f5823af06da8f21d341ad1b8a8d2fd895fe8cfe39fb"
+    },
+    {
+      "document": "0.2.1-F104-P0-SOURCE-CANDIDATES-R2.md",
+      "sha256": "88bc08c7cf95744d1f84c944caa26a3d4b87cb9bc2a448012d875ce6c28d87e8"
+    },
+    {
+      "document": "0.2.1-F104-P0-CLOSE-R4.md",
+      "sha256": "5c704949596ec12d5a995c2a1760d096210447c91044890b1971b3aa080c711c"
+    }
+  ],
+  "import": {
+    "source": "ACCEPTED_CLEAN_GIT_OBJECT_ONLY",
+    "method": "GIT_ARCHIVE_EXACT_COMMIT",
+    "owned_prefix": ".kilix-import/",
+    "upstream_history_imported": false,
+    "dirty_prototype_read": false,
+    "dirty_prototype_copied": false,
+    "remote_population_expected": 0,
+    "product_identity": "itsmygithubacct <itsmygithubacct@users.noreply.github.com>"
+  },
+  "expected_source_risks": [
+    {
+      "path": "data/cache/.gitkeep",
+      "bytes": 27,
+      "sha256": "f9a52f9892c0566ac33e11849185f1cc470edb16c4a7427f0aa8fe83e2175e39",
+      "disposition": "EMPTY_CACHE_PLACEHOLDER_NOT_GENERATED_MATERIAL"
+    }
+  ]
+}
