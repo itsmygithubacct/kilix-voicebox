@@ -18,7 +18,7 @@ fi
 echo "Building voicebox-server for platform: $PLATFORM"
 
 # Never mutate the environment or resolve dependencies during a release build.
-uv run --frozen --group build python backend/build_binary.py
+uv run --frozen --isolated --no-default-groups --group build python backend/build_binary.py
 
 # Create binaries directory if it doesn't exist
 mkdir -p tauri/src-tauri/binaries
