@@ -7,8 +7,13 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
 cd "$REPO_ROOT"
 
-# Determine platform
-PLATFORM=$(rustc --print host-tuple 2>/dev/null || echo "unknown")
+# Determine the exact Rust host tuple used by Tauri. Refuse an unavailable or
+# malformed toolchain instead of producing an unusable `-unknown` sidecar name.
+PLATFORM=$(rustc -vV | sed -n 's/^host: //p')
+if [[ ! "$PLATFORM" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{2,127}$ ]]; then
+    echo "Error: unable to determine a valid Rust host tuple"
+    exit 1
+fi
 
 echo "Building voicebox-server for platform: $PLATFORM"
 
