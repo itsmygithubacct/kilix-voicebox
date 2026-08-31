@@ -66,6 +66,8 @@ Build the provider-free Python sidecar and its provenance manifest with:
 
 The manifest records the source commit and tree, lock digest, binary digest,
 binary length, provider endpoints, and the absence of an embedded model runtime.
+The build runs the locked PyInstaller environment without inheriting Python
+startup variables or user uv configuration.
 
 ## Local API
 

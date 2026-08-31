@@ -17,9 +17,19 @@ fi
 
 echo "Building voicebox-server for platform: $PLATFORM"
 
-# Never mutate the environment or resolve dependencies during a release build.
-uv run --frozen --isolated --no-default-groups --group build \
-    python -I backend/build_binary.py
+# Never let caller-controlled Python startup state reach PyInstaller's child
+# interpreters.  The explicit environment also keeps the locked uv execution
+# independent of user uv configuration while retaining only the paths needed
+# to locate the selected build tools and scratch directory.
+env -i \
+    HOME="${HOME:?HOME is required for the locked build cache}" \
+    PATH="$PATH" \
+    TMPDIR="${TMPDIR:-/tmp}" \
+    LC_ALL=C.UTF-8 \
+    PYTHONNOUSERSITE=1 \
+    PYTHONSAFEPATH=1 \
+    uv --no-config run --frozen --isolated --no-default-groups --group build \
+        python -I backend/build_binary.py
 
 # Create binaries directory if it doesn't exist
 mkdir -p tauri/src-tauri/binaries

@@ -452,6 +452,82 @@ class CuratedImportTests(unittest.TestCase):
             self.assertEqual(trusted_gate.returncode, 1)
             self.assertIn(b"WORKTREE_BLOB_IDENTITY", trusted_gate.stderr)
 
+    def test_sidecar_build_sanitizes_transitive_python_environment(self) -> None:
+        scratch = os.environ.get("TMPDIR")
+        with tempfile.TemporaryDirectory(
+            prefix="voicebox-sidecar-environment-", dir=scratch
+        ) as temp:
+            temporary = Path(temp)
+            root = temporary / "repository"
+            scripts = root / "scripts"
+            tools = temporary / "tools"
+            poison = temporary / "python-path"
+            scripts.mkdir(parents=True)
+            tools.mkdir()
+            poison.mkdir()
+
+            build_script = scripts / "build-server.sh"
+            build_script.write_bytes(
+                (self.root / "scripts" / "build-server.sh").read_bytes()
+            )
+            build_script.chmod(0o755)
+            (poison / "sitecustomize.py").write_text(
+                "import os\nos._exit(86)\n", encoding="utf-8"
+            )
+
+            rustc = tools / "rustc"
+            rustc.write_text(
+                "#!/bin/sh\n"
+                "set -eu\n"
+                "test \"${1-}\" = -vV\n"
+                "printf 'rustc 1.0.0\\nhost: x86_64-unknown-linux-gnu\\n'\n",
+                encoding="utf-8",
+            )
+            rustc.chmod(0o755)
+
+            uv = tools / "uv"
+            uv.write_text(
+                "#!/bin/sh\n"
+                "set -eu\n"
+                "test \"${PYTHONNOUSERSITE-}\" = 1\n"
+                "test \"${PYTHONSAFEPATH-}\" = 1\n"
+                "python3 -c 'from pathlib import Path; "
+                "root = Path.cwd(); "
+                "dist = root / \"backend\" / \"dist\"; "
+                "dist.mkdir(parents=True); "
+                "(dist / \"voicebox-server\").write_bytes(b\"sidecar\"); "
+                "(dist / \"voicebox-server.provenance.json\").write_text("
+                "\"{}\\n\", encoding=\"utf-8\")'\n",
+                encoding="utf-8",
+            )
+            uv.chmod(0o755)
+
+            environment = os.environ.copy()
+            environment["PATH"] = f"{tools}{os.pathsep}{environment['PATH']}"
+            environment["PYTHONPATH"] = str(poison)
+            environment["PYTHONHOME"] = str(temporary / "invalid-python-home")
+            result = subprocess.run(
+                (str(build_script),),
+                cwd=root,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr.decode())
+            copied = (
+                root
+                / "tauri"
+                / "src-tauri"
+                / "binaries"
+                / "voicebox-server-x86_64-unknown-linux-gnu"
+            )
+            self.assertEqual(copied.read_bytes(), b"sidecar")
+            self.assertEqual(
+                copied.with_suffix(".provenance.json").read_text(encoding="utf-8"),
+                "{}\n",
+            )
+
     def test_repository_shape_refuses_hidden_index_paths(self) -> None:
         scratch = os.environ.get("TMPDIR")
         cases = ("--skip-worktree", "--assume-unchanged")
