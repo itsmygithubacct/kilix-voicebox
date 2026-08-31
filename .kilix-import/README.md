@@ -70,11 +70,20 @@ It proves PNG decoded/metadata identity, the removed binary's imported identity,
 the 1/1 historical match and its bounded context, the 3/3 generator-input
 measurements, the unchanged regeneration rule, and exact relocation of all 3/3
 resources at that historical boundary. It separately audits the current product
-tree for forbidden tracked/untracked artifact paths, the removed generated
-binary, licence bytes, absent upstream history, and complete project identity.
+tree from publishable Git objects for forbidden tracked/untracked artifact paths,
+the removed generated binary, licence bytes, absent upstream history, and
+complete project identity. Provenance, licence, and ignore-policy evidence comes
+from `HEAD`, not a possibly hidden worktree view. Replacement refs, grafts,
+shallow history, hidden index flags, gitlinks, symlinks, and other non-file tree
+leaves are refused; ignore semantics are reconstructed only from tracked
+`HEAD` ignore files in isolated Git configuration.
 Local archives may configure remotes 0/1; a published clone may configure only
 1/1 remote, and both its effective fetch and push URLs must equal
-`https://github.com/itsmygithubacct/kilix-voicebox.git`.
+`https://github.com/itsmygithubacct/kilix-voicebox.git`. Transport-helper,
+mirror, implicit push-refspec, and repository-local follow-tag configuration are
+refused. An authorized publication must still use an explicit full `work/*`
+refspec with `git push --no-follow-tags`; this verifier grants no authority to
+publish another namespace.
 
 ## Status boundary
 

@@ -35,6 +35,25 @@ def require(condition: bool, code: str) -> None:
 
 
 def git(*arguments: str) -> str:
+    environment = os.environ.copy()
+    unsafe_names = {
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_NAMESPACE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    }
+    for name in list(environment):
+        if (name in unsafe_names or name.startswith("GIT_CONFIG_KEY_")
+                or name.startswith("GIT_CONFIG_VALUE_")):
+            environment.pop(name)
+    environment["GIT_NO_REPLACE_OBJECTS"] = "1"
     result = subprocess.run(
         ("git", *arguments),
         cwd=ROOT,
@@ -42,6 +61,7 @@ def git(*arguments: str) -> str:
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
         text=True,
+        env=environment,
     )
     require(result.returncode == 0, "GIT_QUERY")
     return result.stdout
@@ -60,23 +80,28 @@ def source_files() -> list[Path]:
 
 
 def main() -> int:
-    subprocess.run(
-        ("git", "merge-base", "--is-ancestor", IMPORT_PROOF_COMMIT, "HEAD"),
-        cwd=ROOT,
-        check=True,
-        stdout=subprocess.DEVNULL,
-        stderr=subprocess.DEVNULL,
-    )
-    candidate = sorted(
-        Path(line) for line in git("ls-files", "--cached", "--others", "--exclude-standard")
-        .splitlines() if line and (ROOT / line).is_file()
-    )
-    scanned = source_files()
-    tracked_symlinks = [
-        line.split(maxsplit=3)[-1]
-        for line in git("ls-files", "-s").splitlines()
-        if line.startswith("120000 ")
+    git("merge-base", "--is-ancestor", IMPORT_PROOF_COMMIT, "HEAD")
+    index_entries = [
+        record for record in git("ls-files", "-s", "-z").split("\0") if record
     ]
+    parsed_entries = [record.partition("\t") for record in index_entries]
+    tracked_nonfiles = []
+    tracked = []
+    for metadata, separator, path in parsed_entries:
+        fields = metadata.split()
+        if (separator != "\t" or len(fields) != 3
+                or fields[0] not in {"100644", "100755"}
+                or fields[2] != "0"):
+            tracked_nonfiles.append(path or metadata)
+            continue
+        tracked.append(Path(path))
+    untracked = [
+        Path(record) for record in git(
+            "ls-files", "--others", "--exclude-standard", "-z"
+        ).split("\0") if record and (ROOT / record).is_file()
+    ]
+    candidate = sorted(tracked + untracked)
+    scanned = source_files()
     audio = [path for path in scanned if path.suffix.casefold() in AUDIO_SUFFIXES]
     databases = [path for path in scanned if path.suffix.casefold() in DATABASE_SUFFIXES]
     models = [path for path in scanned if path.suffix.casefold() in MODEL_SUFFIXES]
@@ -89,7 +114,7 @@ def main() -> int:
         if path.name.casefold() in SECRET_NAMES
         or path.suffix.casefold() in {".key", ".pem"}
     ]
-    require(not tracked_symlinks, "TRACKED_SYMLINK")
+    require(not tracked_nonfiles, "TRACKED_NON_FILE")
     require(not audio, "PRIVATE_AUDIO")
     require(not databases, "PRIVATE_DATABASE")
     require(not models, "MODEL_PAYLOAD")
@@ -99,7 +124,7 @@ def main() -> int:
     print(
         "VOICEBOX_IMPORT_INVENTORY_PASS "
         f"(import ancestry 1/1; candidate files {len(candidate)}/{len(candidate)}; "
-        f"source files scanned {len(scanned)}/{len(scanned)}; tracked symlinks "
+        f"source files scanned {len(scanned)}/{len(scanned)}; tracked non-files "
         f"0/{len(candidate)}; private audio 0/{len(scanned)}; private databases "
         f"0/{len(scanned)}; model payloads 0/{len(scanned)}; private data paths "
         f"0/{len(scanned)}; secret artifacts 0/{len(scanned)})"

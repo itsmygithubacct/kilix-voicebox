@@ -26,6 +26,30 @@ EXPECTED_IMPORT_TREE = "57f4545ddb5b163b0df8429b0fb12de66d905ebd"
 EXPECTED_HYGIENE_COMMIT = "f76181896488583bc0d1abb9b37752e075e99cf3"
 EXPECTED_HYGIENE_TREE = "6e02708895e7dc1c5ede3331afb847be6d596b1c"
 EXPECTED_PUBLIC_REMOTE = "https://github.com/itsmygithubacct/kilix-voicebox.git"
+EXPECTED_PROVENANCE_KEYS = {
+    "schema",
+    "status",
+    "upstream",
+    "accepted_evidence",
+    "import",
+    "publication",
+    "expected_source_risks",
+    "hygiene_delta",
+}
+EXPECTED_EVIDENCE = [
+    {
+        "document": "0.2.1-F104-P0-SOURCE-HYGIENE-R1.md",
+        "sha256": "356cd24e112c593b25747f5823af06da8f21d341ad1b8a8d2fd895fe8cfe39fb",
+    },
+    {
+        "document": "0.2.1-F104-P0-SOURCE-CANDIDATES-R2.md",
+        "sha256": "88bc08c7cf95744d1f84c944caa26a3d4b87cb9bc2a448012d875ce6c28d87e8",
+    },
+    {
+        "document": "0.2.1-F104-P0-CLOSE-R4.md",
+        "sha256": "5c704949596ec12d5a995c2a1760d096210447c91044890b1971b3aa080c711c",
+    },
+]
 EXPECTED_CONTROL_PATHS = [
     ".kilix-import/PROVENANCE.json",
     ".kilix-import/README.md",
@@ -112,14 +136,101 @@ def require(condition: bool, code: str, message: str) -> None:
 def git(root: Path, *args: str, input_bytes: bytes | None = None,
         env: dict[str, str] | None = None, check: bool = True) -> subprocess.CompletedProcess[bytes]:
     command = ["git", "-C", str(root), *args]
+    process_env = os.environ.copy()
+    unsafe_names = {
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_CONFIG_COUNT",
+        "GIT_CONFIG_PARAMETERS",
+        "GIT_DIR",
+        "GIT_INDEX_FILE",
+        "GIT_NAMESPACE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    }
+    for name in list(process_env):
+        if (name in unsafe_names or name.startswith("GIT_CONFIG_KEY_")
+                or name.startswith("GIT_CONFIG_VALUE_")):
+            process_env.pop(name)
+    if env is not None:
+        allowed_overrides = {"GIT_CONFIG_GLOBAL", "GIT_CONFIG_SYSTEM", "GIT_INDEX_FILE"}
+        require(set(env) <= allowed_overrides, "GIT_ENV_OVERRIDE",
+                "internal Git call requested an unapproved environment override")
+        process_env.update(env)
+    process_env["GIT_NO_REPLACE_OBJECTS"] = "1"
     return subprocess.run(
         command,
         input=input_bytes,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
-        env=env,
+        env=process_env,
         check=check,
     )
+
+
+def strict_git_lines(result: subprocess.CompletedProcess[bytes], code: str) -> list[str]:
+    raw = result.stdout
+    require(not raw or raw.endswith(b"\n"), code,
+            "Git record output lacks its exact LF terminator")
+    records = raw[:-1].split(b"\n") if raw else []
+    require(all(record for record in records), code,
+            "Git record output contains an empty or embedded-LF value")
+    return [record.decode("utf-8", "strict") for record in records]
+
+
+def strict_git_nul_records(result: subprocess.CompletedProcess[bytes],
+                           code: str) -> list[str]:
+    raw = result.stdout
+    require(not raw or raw.endswith(b"\0"), code,
+            "Git record output lacks its exact NUL terminator")
+    records = raw[:-1].split(b"\0") if raw else []
+    require(all(record for record in records), code,
+            "Git record output contains an empty value")
+    return [record.decode("utf-8", "strict") for record in records]
+
+
+def verify_repository_shape(root: Path) -> dict[str, int]:
+    replacements = strict_git_lines(
+        git(root, "for-each-ref", "--format=%(refname)", "refs/replace"),
+        "REPLACE_REF_RECORDS",
+    )
+    require(not replacements, "REPLACE_REFS",
+            "replacement refs can rewrite the candidate object graph")
+
+    graft_records = strict_git_lines(
+        git(root, "rev-parse", "--git-path", "info/grafts"),
+        "GRAFT_PATH_RECORDS",
+    )
+    require(len(graft_records) == 1, "GRAFT_PATH_POPULATION",
+            "Git returned an unexpected graft-path population")
+    graft_path = Path(graft_records[0])
+    if not graft_path.is_absolute():
+        graft_path = root / graft_path
+    require(not graft_path.exists(), "GRAFT_FILE",
+            "legacy graft state can rewrite the candidate object graph")
+
+    shallow = strict_git_lines(
+        git(root, "rev-parse", "--is-shallow-repository"),
+        "SHALLOW_RECORDS",
+    )
+    require(shallow == ["false"], "SHALLOW_REPOSITORY",
+            "the complete candidate history is not available")
+
+    index_records = strict_git_nul_records(
+        git(root, "ls-files", "-v", "-z"), "INDEX_FLAG_RECORDS"
+    )
+    hidden = [record for record in index_records if not record.startswith("H ")]
+    require(not hidden, "INDEX_FLAGS",
+            "assume-unchanged or skip-worktree state hides tracked bytes")
+    return {
+        "replace_refs": len(replacements),
+        "graft_files": int(graft_path.exists()),
+        "shallow_repositories": int(shallow != ["false"]),
+        "hidden_index_paths": len(hidden),
+        "index_paths": len(index_records),
+    }
 
 
 def repository_root(start: Path | None = None) -> Path:
@@ -129,11 +240,12 @@ def repository_root(start: Path | None = None) -> Path:
 
 
 def load_provenance(root: Path) -> dict[str, Any]:
-    with (root / PROVENANCE_REL).open("r", encoding="utf-8") as handle:
-        return json.load(handle)
+    return json.loads(git(root, "show", f"HEAD:{PROVENANCE_REL}").stdout)
 
 
 def validate_provenance(provenance: dict[str, Any]) -> None:
+    require(set(provenance) == EXPECTED_PROVENANCE_KEYS,
+            "PROVENANCE_KEYS", "top-level provenance claim set drifted")
     require(provenance.get("schema") == EXPECTED_SCHEMA,
             "PROVENANCE_SCHEMA", "provenance schema identity drifted")
     require(provenance.get("status") == EXPECTED_STATUS,
@@ -173,11 +285,8 @@ def validate_provenance(provenance: dict[str, Any]) -> None:
         "authorized_remote_urls": [EXPECTED_PUBLIC_REMOTE],
     }, "PUBLICATION_BOUNDARY", "curated publication boundary drifted")
     evidence = provenance.get("accepted_evidence", [])
-    require(len(evidence) == 3, "EVIDENCE_POPULATION",
-            "accepted evidence population differs from 3/3")
-    require(all(re.fullmatch(r"[0-9a-f]{64}", str(row.get("sha256", "")))
-                for row in evidence),
-            "EVIDENCE_DIGEST", "accepted evidence digest is invalid")
+    require(evidence == EXPECTED_EVIDENCE, "EVIDENCE_IDENTITY",
+            "accepted evidence identities differ from the exact 3/3 rows")
     risks = provenance.get("expected_source_risks", [])
     require(risks == [{
         "path": "data/cache/.gitkeep",
@@ -277,8 +386,7 @@ def source_tree(root: Path, owned_paths: list[str], revision: str = "HEAD") -> s
     scratch_root = os.environ.get("TMPDIR")
     with tempfile.TemporaryDirectory(prefix="voicebox-import-", dir=scratch_root) as temporary:
         index_path = str(Path(temporary) / "index")
-        environment = os.environ.copy()
-        environment["GIT_INDEX_FILE"] = index_path
+        environment = {"GIT_INDEX_FILE": index_path}
         git(root, "read-tree", revision, env=environment)
         for path in owned_paths:
             git(root, "update-index", "--force-remove", "--", path, env=environment)
@@ -294,20 +402,16 @@ def tree_population(root: Path, tree: str) -> tuple[list[str], int]:
             continue
         metadata, path_bytes = record.split(b"\t", 1)
         fields = metadata.split()
-        require(len(fields) == 4 and fields[1] == b"blob", "TREE_ENTRY",
-                "upstream snapshot contains a non-blob leaf")
+        require(len(fields) == 4, "TREE_ENTRY",
+                "Git tree contains a malformed leaf")
+        require(fields[1] == b"blob", "TREE_ENTRY_TYPE",
+                "Git tree contains a non-blob leaf")
+        require(fields[0] in {b"100644", b"100755"}, "TREE_ENTRY_MODE",
+                "Git tree contains a symlink or non-file mode")
         size = int(fields[3])
         paths.append(path_bytes.decode("utf-8", "strict"))
         total += size
     return paths, total
-
-
-def sha256_file(path: Path) -> str:
-    digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for block in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
 
 
 def sha256_bytes(content: bytes) -> str:
@@ -316,6 +420,51 @@ def sha256_bytes(content: bytes) -> str:
 
 def git_blob(root: Path, revision: str, path: str) -> bytes:
     return git(root, "show", f"{revision}:{path}").stdout
+
+
+def verify_revision_blob_identity(root: Path, revision: str, path: str,
+                                  expected_sha256: str, code: str) -> bytes:
+    content = git_blob(root, revision, path)
+    require(sha256_bytes(content) == expected_sha256, code,
+            f"publishable Git blob identity drifted: {path}")
+    return content
+
+
+def verify_revision_ignore_policy(root: Path, revision: str, path: str,
+                                  exact_rule: str) -> int:
+    ignore_paths = [
+        candidate for candidate in tracked_paths(root, revision)
+        if candidate == ".gitignore" or candidate.endswith("/.gitignore")
+    ]
+    root_ignore = git_blob(root, revision, ".gitignore").decode("utf-8")
+    require(root_ignore.splitlines().count(exact_rule) == 1,
+            "CURRENT_IGNORE_RULE",
+            "published root .gitignore needs exactly 1/1 generated-binary rule")
+
+    scratch_root = os.environ.get("TMPDIR")
+    with tempfile.TemporaryDirectory(
+        prefix="voicebox-ignore-", dir=scratch_root
+    ) as temporary:
+        isolated = Path(temporary)
+        isolated_env = {
+            "GIT_CONFIG_GLOBAL": os.devnull,
+            "GIT_CONFIG_SYSTEM": os.devnull,
+        }
+        git(isolated, "init", "--quiet", env=isolated_env)
+        for ignore_path in ignore_paths:
+            destination = isolated / ignore_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(git_blob(root, revision, ignore_path))
+        target = isolated / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.touch()
+        ignored = git(
+            isolated, "check-ignore", "--quiet", "--no-index", "--", path,
+            env=isolated_env, check=False,
+        )
+        require(ignored.returncode == 0, "CURRENT_IGNORE_SEMANTICS",
+                "published ignore files do not ignore the generated binary")
+    return len(ignore_paths)
 
 
 def png_chunks(content: bytes) -> list[tuple[bytes, bytes]]:
@@ -553,10 +702,12 @@ def verify_generated_binary_boundary(root: Path, import_commit: str,
 
 
 def verify_remote_policy(root: Path, policy: dict[str, Any]) -> dict[str, int]:
-    names = [
-        line for line in git(root, "remote").stdout.decode("utf-8").splitlines()
-        if line
-    ]
+    follow_tags = git(
+        root, "config", "--local", "--get-all", "push.followTags", check=False
+    )
+    require(follow_tags.returncode == 1, "PUSH_FOLLOW_TAGS",
+            "repository-local configuration can publish reachable tags")
+    names = strict_git_lines(git(root, "remote"), "REMOTE_NAME_RECORDS")
     maximum = policy["maximum_configured_remotes"]
     authorized = set(policy["authorized_remote_urls"])
     require(len(names) <= maximum, "REMOTE_POPULATION",
@@ -567,18 +718,28 @@ def verify_remote_policy(root: Path, policy: dict[str, Any]) -> dict[str, int]:
     for name in names:
         require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name) is not None,
                 "REMOTE_NAME", "configured remote name is not a bounded identifier")
-        fetch = [
-            line for line in git(
-                root, "remote", "get-url", "--all", name, check=False
-            ).stdout.decode("utf-8").splitlines()
-            if line
-        ]
-        effective_push = [
-            line for line in git(
-                root, "remote", "get-url", "--push", "--all", name, check=False
-            ).stdout.decode("utf-8").splitlines()
-            if line
-        ]
+        forbidden_remote_config = (
+            ("vcs", "REMOTE_VCS_OVERRIDE",
+             "configured remote selects a non-URL transport helper"),
+            ("mirror", "REMOTE_MIRROR",
+             "configured remote can mirror refs outside the work namespace"),
+            ("push", "REMOTE_PUSH_REFSPEC",
+             "configured remote adds an implicit push refspec"),
+        )
+        for suffix, code, message in forbidden_remote_config:
+            configured = git(
+                root, "config", "--get-all", f"remote.{name}.{suffix}",
+                check=False,
+            )
+            require(configured.returncode == 1, code, message)
+        fetch = strict_git_lines(
+            git(root, "remote", "get-url", "--all", name, check=False),
+            "REMOTE_FETCH_RECORDS",
+        )
+        effective_push = strict_git_lines(
+            git(root, "remote", "get-url", "--push", "--all", name, check=False),
+            "REMOTE_PUSH_RECORDS",
+        )
         require(len(fetch) == 1, "REMOTE_FETCH_POPULATION",
                 "each configured remote needs exactly 1/1 fetch URL")
         require(len(effective_push) == 1, "REMOTE_PUSH_POPULATION",
@@ -601,6 +762,7 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
     status = git(root, "status", "--porcelain=v1", "-z", "--untracked-files=all").stdout
     require(status == b"", "WORKTREE_NOT_CLEAN",
             "exact import verification requires a clean tracked and untracked worktree")
+    shape_counts = verify_repository_shape(root)
 
     import_commit = provenance["import"]["product_snapshot_commit"]
     root_commits = sorted(line for line in git(
@@ -697,6 +859,12 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
             "HYGIENE_RISK_IDENTITY", "accepted empty placeholder identity drifted")
 
     current_paths = tracked_paths(root)
+    current_tree = git(
+        root, "rev-parse", "HEAD^{tree}"
+    ).stdout.decode("ascii").strip()
+    current_tree_paths, current_blob_bytes = tree_population(root, current_tree)
+    require(current_tree_paths == current_paths, "CURRENT_TREE_PATHS",
+            "current path enumeration differs from the publishable Git tree")
     owned = sorted(path for path in current_paths if path.startswith(OWNED_PREFIX))
     source = sorted(path for path in current_paths if not path.startswith(OWNED_PREFIX))
     require(owned == provenance["import"]["control_paths"], "OWNED_POPULATION",
@@ -709,16 +877,14 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
     )
     require(current_binary.returncode != 0, "CURRENT_GENERATED_BINARY",
             "generated macOS binary is tracked in the current product tree")
-    ignored = git(
-        root, "check-ignore", "--quiet", "--no-index", "--", removed_path,
-        check=False,
+    current_ignore_files = verify_revision_ignore_policy(
+        root, "HEAD", removed_path, binary_boundary["gitignore"]["exact_rule"]
     )
-    require(ignored.returncode == 0, "CURRENT_GENERATED_NOT_IGNORED",
-            "regenerated macOS binary would become a publication input")
 
-    licence_path = root / expected["licence_path"]
-    require(sha256_file(licence_path) == expected["licence_sha256"],
-            "LICENCE_IDENTITY", "upstream MIT licence bytes drifted")
+    verify_revision_blob_identity(
+        root, "HEAD", expected["licence_path"], expected["licence_sha256"],
+        "LICENCE_IDENTITY",
+    )
 
     untracked_raw = git(root, "ls-files", "--others", "--exclude-standard", "-z").stdout
     untracked = [part.decode("utf-8", "strict") for part in untracked_raw.split(b"\0") if part]
@@ -747,6 +913,10 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
         "boundary_source_files": len(boundary_source),
         "current_source_files": len(source),
         "current_source_risks": len(current_risks),
+        "current_blob_paths": len(current_tree_paths),
+        "current_blob_bytes": current_blob_bytes,
+        "current_ignore_files": current_ignore_files,
+        "current_ignore_rules": 1,
         "source_delta_paths": len(source_delta),
         "normalized_pngs": normalized_count,
         **generated_binary_counts,
@@ -756,6 +926,7 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
         "product_commits": len(authors),
         "hygiene_boundary_commits": 1,
         "hygiene_boundary_ancestors": 1,
+        **shape_counts,
         **remote_counts,
     }
 
@@ -785,8 +956,17 @@ def run() -> None:
         f"{counts['platform_resource_configs']}/1 macOS-only resource config; "
         f"{counts['scanner_exception_candidates']}/0 scanner exceptions required; "
         f"{counts['owned_files']}/4 import-control files; "
+        f"{counts['current_blob_paths']}/{counts['current_blob_paths']} current blob leaves; "
+        f"{counts['current_blob_bytes']}/{counts['current_blob_bytes']} current blob bytes; "
+        f"{counts['current_ignore_rules']}/1 generated-binary ignore rules; "
+        f"{counts['current_ignore_files']}/{counts['current_ignore_files']} "
+        f"tracked ignore files evaluated; "
         f"{counts['current_source_risks']}/{counts['current_source_files']} "
         f"forbidden current source paths; "
+        f"{counts['replace_refs']}/0 replace refs; "
+        f"{counts['graft_files']}/0 graft files; "
+        f"{counts['shallow_repositories']}/0 shallow repositories; "
+        f"{counts['hidden_index_paths']}/{counts['index_paths']} hidden index paths; "
         f"{counts['product_commits']}/{counts['product_commits']} product commits "
         f"use the project identity; {counts['remotes']}/1 configured remotes; "
         f"{counts['remote_fetch_urls']}/{counts['remotes']} authorized fetch URLs; "

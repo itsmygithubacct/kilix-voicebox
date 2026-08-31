@@ -26,6 +26,22 @@ class CuratedImportTests(unittest.TestCase):
             verify.validate_provenance(provenance)
         self.assertEqual(caught.exception.code, code)
 
+    @staticmethod
+    def initialize_repository(root: Path) -> None:
+        verify.git(root, "init", "--quiet")
+        verify.git(root, "config", "user.name", "itsmygithubacct")
+        verify.git(
+            root,
+            "config",
+            "user.email",
+            "itsmygithubacct@users.noreply.github.com",
+        )
+
+    @staticmethod
+    def commit_all(root: Path, message: str = "fixture") -> None:
+        verify.git(root, "add", "--all")
+        verify.git(root, "commit", "--quiet", "-m", message)
+
     def test_provenance_is_exact(self) -> None:
         verify.validate_provenance(self.provenance)
 
@@ -50,6 +66,13 @@ class CuratedImportTests(unittest.TestCase):
         self.assertEqual(counts["platform_resource_configs"], 1)
         self.assertEqual(counts["scanner_exception_candidates"], 0)
         self.assertEqual(counts["current_source_risks"], 0)
+        self.assertEqual(counts["current_blob_paths"],
+                         counts["current_source_files"] + counts["owned_files"])
+        self.assertEqual(counts["replace_refs"], 0)
+        self.assertEqual(counts["graft_files"], 0)
+        self.assertEqual(counts["shallow_repositories"], 0)
+        self.assertEqual(counts["hidden_index_paths"], 0)
+        self.assertEqual(counts["index_paths"], counts["current_blob_paths"])
         self.assertLessEqual(counts["remotes"], 1)
         self.assertEqual(counts["remote_fetch_urls"], counts["remotes"])
         self.assertEqual(counts["remote_push_urls"], counts["remotes"])
@@ -102,6 +125,26 @@ class CuratedImportTests(unittest.TestCase):
         mutant = copy.deepcopy(self.provenance)
         mutant["upstream"]["tree"] = "0" * 40
         self.refusal(mutant, "UPSTREAM_IDENTITY")
+
+    def test_evidence_document_mutation_is_refused(self) -> None:
+        mutant = copy.deepcopy(self.provenance)
+        mutant["accepted_evidence"][0]["document"] = "substitute.md"
+        self.refusal(mutant, "EVIDENCE_IDENTITY")
+
+    def test_evidence_digest_mutation_is_refused(self) -> None:
+        mutant = copy.deepcopy(self.provenance)
+        mutant["accepted_evidence"][0]["sha256"] = "0" * 64
+        self.refusal(mutant, "EVIDENCE_IDENTITY")
+
+    def test_evidence_extra_field_is_refused(self) -> None:
+        mutant = copy.deepcopy(self.provenance)
+        mutant["accepted_evidence"][0]["accepted"] = True
+        self.refusal(mutant, "EVIDENCE_IDENTITY")
+
+    def test_extra_top_level_claim_is_refused(self) -> None:
+        mutant = copy.deepcopy(self.provenance)
+        mutant["release_admitted"] = True
+        self.refusal(mutant, "PROVENANCE_KEYS")
 
     def test_history_policy_mutation_is_refused(self) -> None:
         mutant = copy.deepcopy(self.provenance)
@@ -166,6 +209,230 @@ class CuratedImportTests(unittest.TestCase):
             with self.assertRaises(verify.ImportErrorDetail) as caught:
                 verify.verify_remote_policy(root, policy)
             self.assertEqual(caught.exception.code, "REMOTE_POPULATION")
+
+    def test_remote_policy_refuses_transport_and_cr_bypasses(self) -> None:
+        scratch = os.environ.get("TMPDIR")
+        policy = self.provenance["publication"]
+        cases = (
+            ("vcs", "REMOTE_VCS_OVERRIDE"),
+            ("mirror", "REMOTE_MIRROR"),
+            ("push-refspec", "REMOTE_PUSH_REFSPEC"),
+            ("follow-tags", "PUSH_FOLLOW_TAGS"),
+            ("fetch-cr", "REMOTE_FETCH_URL"),
+            ("push-cr", "REMOTE_PUSH_URL"),
+        )
+        for case, expected_code in cases:
+            with self.subTest(case=case):
+                with tempfile.TemporaryDirectory(
+                    prefix="voicebox-remote-", dir=scratch
+                ) as temp:
+                    root = Path(temp)
+                    verify.git(root, "init", "--quiet")
+                    verify.git(root, "remote", "add", "origin",
+                               verify.EXPECTED_PUBLIC_REMOTE)
+                    if case == "vcs":
+                        verify.git(root, "config", "remote.origin.vcs",
+                                   "definitely-not-a-real-transport")
+                    elif case == "mirror":
+                        verify.git(root, "config", "remote.origin.mirror", "true")
+                    elif case == "push-refspec":
+                        verify.git(
+                            root,
+                            "config",
+                            "remote.origin.push",
+                            "+refs/heads/*:refs/heads/*",
+                        )
+                    elif case == "follow-tags":
+                        verify.git(root, "config", "push.followTags", "true")
+                    elif case == "fetch-cr":
+                        verify.git(root, "config", "remote.origin.url",
+                                   verify.EXPECTED_PUBLIC_REMOTE + "\r")
+                    else:
+                        verify.git(root, "config", "remote.origin.pushurl",
+                                   verify.EXPECTED_PUBLIC_REMOTE + "\r")
+                    with self.assertRaises(verify.ImportErrorDetail) as caught:
+                        verify.verify_remote_policy(root, policy)
+                    self.assertEqual(caught.exception.code, expected_code)
+
+    def test_provenance_is_loaded_from_head_blob(self) -> None:
+        scratch = os.environ.get("TMPDIR")
+        with tempfile.TemporaryDirectory(
+            prefix="voicebox-head-provenance-", dir=scratch
+        ) as temp:
+            root = Path(temp)
+            self.initialize_repository(root)
+            provenance = root / ".kilix-import" / "PROVENANCE.json"
+            provenance.parent.mkdir()
+            provenance.write_text('{"value":"head"}\n', encoding="utf-8")
+            self.commit_all(root)
+            provenance.write_text('{"value":"worktree"}\n', encoding="utf-8")
+            verify.git(
+                root,
+                "update-index",
+                "--skip-worktree",
+                ".kilix-import/PROVENANCE.json",
+            )
+            self.assertEqual(verify.git(root, "status", "--porcelain").stdout, b"")
+            self.assertEqual(verify.load_provenance(root), {"value": "head"})
+
+    def test_licence_identity_is_loaded_from_head_blob(self) -> None:
+        scratch = os.environ.get("TMPDIR")
+        with tempfile.TemporaryDirectory(
+            prefix="voicebox-head-licence-", dir=scratch
+        ) as temp:
+            root = Path(temp)
+            self.initialize_repository(root)
+            licence = root / "LICENSE"
+            licence.write_bytes(b"unexpected published licence\n")
+            self.commit_all(root)
+            displayed = b"expected worktree licence\n"
+            licence.write_bytes(displayed)
+            verify.git(root, "update-index", "--skip-worktree", "LICENSE")
+            self.assertEqual(verify.git(root, "status", "--porcelain").stdout, b"")
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_revision_blob_identity(
+                    root,
+                    "HEAD",
+                    "LICENSE",
+                    verify.sha256_bytes(displayed),
+                    "LICENCE_IDENTITY",
+                )
+            self.assertEqual(caught.exception.code, "LICENCE_IDENTITY")
+
+    def test_repository_shape_refuses_hidden_index_paths(self) -> None:
+        scratch = os.environ.get("TMPDIR")
+        cases = ("--skip-worktree", "--assume-unchanged")
+        for option in cases:
+            with self.subTest(option=option):
+                with tempfile.TemporaryDirectory(
+                    prefix="voicebox-index-flags-", dir=scratch
+                ) as temp:
+                    root = Path(temp)
+                    self.initialize_repository(root)
+                    (root / "fixture.txt").write_text("fixture\n", encoding="utf-8")
+                    self.commit_all(root)
+                    verify.git(root, "update-index", option, "fixture.txt")
+                    with self.assertRaises(verify.ImportErrorDetail) as caught:
+                        verify.verify_repository_shape(root)
+                    self.assertEqual(caught.exception.code, "INDEX_FLAGS")
+
+    def test_repository_shape_refuses_replace_refs(self) -> None:
+        scratch = os.environ.get("TMPDIR")
+        with tempfile.TemporaryDirectory(
+            prefix="voicebox-replace-ref-", dir=scratch
+        ) as temp:
+            root = Path(temp)
+            self.initialize_repository(root)
+            (root / "fixture.txt").write_text("fixture\n", encoding="utf-8")
+            self.commit_all(root)
+            tree = verify.git(root, "rev-parse", "HEAD^{tree}").stdout.strip()
+            parent = verify.git(
+                root, "commit-tree", tree.decode("ascii"), "-m", "raw parent"
+            ).stdout.decode("ascii").strip()
+            verify.git(root, "replace", "--graft", "HEAD", parent)
+            raw_ancestry = verify.git(
+                root,
+                "merge-base",
+                "--is-ancestor",
+                parent,
+                "HEAD",
+                check=False,
+            )
+            self.assertEqual(raw_ancestry.returncode, 1)
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_repository_shape(root)
+            self.assertEqual(caught.exception.code, "REPLACE_REFS")
+
+    def test_repository_shape_refuses_graft_file(self) -> None:
+        scratch = os.environ.get("TMPDIR")
+        with tempfile.TemporaryDirectory(
+            prefix="voicebox-graft-file-", dir=scratch
+        ) as temp:
+            root = Path(temp)
+            self.initialize_repository(root)
+            (root / "fixture.txt").write_text("fixture\n", encoding="utf-8")
+            self.commit_all(root)
+            head = verify.git(root, "rev-parse", "HEAD").stdout.decode().strip()
+            graft = Path(
+                verify.git(root, "rev-parse", "--git-path", "info/grafts")
+                .stdout.decode()
+                .strip()
+            )
+            if not graft.is_absolute():
+                graft = root / graft
+            graft.parent.mkdir(parents=True, exist_ok=True)
+            graft.write_text(f"{head}\n", encoding="ascii")
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_repository_shape(root)
+            self.assertEqual(caught.exception.code, "GRAFT_FILE")
+
+    def test_repository_shape_refuses_shallow_history(self) -> None:
+        scratch = os.environ.get("TMPDIR")
+        with tempfile.TemporaryDirectory(
+            prefix="voicebox-shallow-", dir=scratch
+        ) as temp:
+            root = Path(temp)
+            self.initialize_repository(root)
+            (root / "fixture.txt").write_text("fixture\n", encoding="utf-8")
+            self.commit_all(root)
+            head = verify.git(root, "rev-parse", "HEAD").stdout.decode().strip()
+            shallow = Path(
+                verify.git(root, "rev-parse", "--git-path", "shallow")
+                .stdout.decode()
+                .strip()
+            )
+            if not shallow.is_absolute():
+                shallow = root / shallow
+            shallow.write_text(f"{head}\n", encoding="ascii")
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_repository_shape(root)
+            self.assertEqual(caught.exception.code, "SHALLOW_REPOSITORY")
+
+    def test_tree_population_refuses_gitlinks(self) -> None:
+        scratch = os.environ.get("TMPDIR")
+        with tempfile.TemporaryDirectory(
+            prefix="voicebox-gitlink-", dir=scratch
+        ) as temp:
+            root = Path(temp)
+            self.initialize_repository(root)
+            (root / "fixture.txt").write_text("fixture\n", encoding="utf-8")
+            self.commit_all(root)
+            commit = verify.git(root, "rev-parse", "HEAD").stdout.strip()
+            tree = verify.git(
+                root,
+                "mktree",
+                input_bytes=b"160000 commit " + commit + b"\tvendor\n",
+            ).stdout.decode("ascii").strip()
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.tree_population(root, tree)
+            self.assertEqual(caught.exception.code, "TREE_ENTRY_TYPE")
+
+    def test_ignore_policy_refuses_external_substitute(self) -> None:
+        scratch = os.environ.get("TMPDIR")
+        with tempfile.TemporaryDirectory(
+            prefix="voicebox-ignore-substitute-", dir=scratch
+        ) as temp:
+            temporary = Path(temp)
+            root = temporary / "repository"
+            root.mkdir()
+            self.initialize_repository(root)
+            (root / ".gitignore").write_text("*.temporary\n", encoding="utf-8")
+            self.commit_all(root)
+            rule = "tauri/src-tauri/gen/Assets.car"
+            external = temporary / "external.ignore"
+            external.write_text(f"{rule}\n", encoding="utf-8")
+            verify.git(root, "config", "core.excludesFile", str(external))
+            target = root / rule
+            target.parent.mkdir(parents=True)
+            target.touch()
+            effective = verify.git(
+                root, "check-ignore", "--quiet", "--no-index", "--", rule,
+                check=False,
+            )
+            self.assertEqual(effective.returncode, 0)
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_revision_ignore_policy(root, "HEAD", rule, rule)
+            self.assertEqual(caught.exception.code, "CURRENT_IGNORE_RULE")
 
     def test_product_snapshot_mutation_is_refused(self) -> None:
         mutant = copy.deepcopy(self.provenance)
