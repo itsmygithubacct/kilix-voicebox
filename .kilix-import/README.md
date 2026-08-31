@@ -73,10 +73,12 @@ resources at that historical boundary. It separately audits the current product
 tree from publishable Git objects for forbidden tracked/untracked artifact paths,
 the removed generated binary, licence bytes, absent upstream history, and
 complete project identity. Provenance, licence, and ignore-policy evidence comes
-from `HEAD`, not a possibly hidden worktree view. Replacement refs, grafts,
-shallow history, hidden index flags, gitlinks, symlinks, and other non-file tree
-leaves are refused; ignore semantics are reconstructed only from tracked
-`HEAD` ignore files in isolated Git configuration.
+from `HEAD`, not a possibly hidden worktree view, and every tracked worktree file
+must byte-match its `HEAD` blob before any worktree-based control runs.
+Replacement refs, grafts, shallow history, hidden index flags, clean/smudge
+substitutions, gitlinks, symlinks, and other non-file tree leaves are refused;
+ignore semantics are reconstructed only from tracked `HEAD` ignore files in
+isolated Git configuration.
 Local archives may configure remotes 0/1; a published clone may configure only
 1/1 remote, and both its effective fetch and push URLs must equal
 `https://github.com/itsmygithubacct/kilix-voicebox.git`. Transport-helper,

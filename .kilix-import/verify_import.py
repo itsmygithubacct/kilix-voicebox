@@ -7,6 +7,7 @@ import hashlib
 import json
 import os
 import re
+import stat
 import struct
 import subprocess
 import sys
@@ -428,6 +429,34 @@ def verify_revision_blob_identity(root: Path, revision: str, path: str,
     require(sha256_bytes(content) == expected_sha256, code,
             f"publishable Git blob identity drifted: {path}")
     return content
+
+
+def read_worktree_regular_file(root: Path, path: str) -> bytes:
+    absolute = root / path
+    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0)
+    flags |= getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0)
+    try:
+        descriptor = os.open(absolute, flags)
+    except OSError as error:
+        raise ImportErrorDetail(
+            "WORKTREE_ENTRY_TYPE",
+            f"tracked worktree path is not an openable regular file: {path}",
+        ) from error
+    with os.fdopen(descriptor, "rb") as handle:
+        require(stat.S_ISREG(os.fstat(handle.fileno()).st_mode),
+                "WORKTREE_ENTRY_TYPE",
+                f"tracked worktree path is not a regular file: {path}")
+        return handle.read()
+
+
+def verify_worktree_blob_identity(root: Path, revision: str,
+                                  paths: list[str]) -> int:
+    for path in paths:
+        worktree_content = read_worktree_regular_file(root, path)
+        require(worktree_content == git_blob(root, revision, path),
+                "WORKTREE_BLOB_IDENTITY",
+                f"worktree bytes differ from the publishable Git blob: {path}")
+    return len(paths)
 
 
 def verify_revision_ignore_policy(root: Path, revision: str, path: str,
@@ -865,6 +894,9 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
     current_tree_paths, current_blob_bytes = tree_population(root, current_tree)
     require(current_tree_paths == current_paths, "CURRENT_TREE_PATHS",
             "current path enumeration differs from the publishable Git tree")
+    current_worktree_blobs = verify_worktree_blob_identity(
+        root, "HEAD", current_tree_paths
+    )
     owned = sorted(path for path in current_paths if path.startswith(OWNED_PREFIX))
     source = sorted(path for path in current_paths if not path.startswith(OWNED_PREFIX))
     require(owned == provenance["import"]["control_paths"], "OWNED_POPULATION",
@@ -915,6 +947,7 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
         "current_source_risks": len(current_risks),
         "current_blob_paths": len(current_tree_paths),
         "current_blob_bytes": current_blob_bytes,
+        "current_worktree_blobs": current_worktree_blobs,
         "current_ignore_files": current_ignore_files,
         "current_ignore_rules": 1,
         "source_delta_paths": len(source_delta),
@@ -958,6 +991,8 @@ def run() -> None:
         f"{counts['owned_files']}/4 import-control files; "
         f"{counts['current_blob_paths']}/{counts['current_blob_paths']} current blob leaves; "
         f"{counts['current_blob_bytes']}/{counts['current_blob_bytes']} current blob bytes; "
+        f"{counts['current_worktree_blobs']}/{counts['current_blob_paths']} "
+        f"worktree blobs match HEAD; "
         f"{counts['current_ignore_rules']}/1 generated-binary ignore rules; "
         f"{counts['current_ignore_files']}/{counts['current_ignore_files']} "
         f"tracked ignore files evaluated; "

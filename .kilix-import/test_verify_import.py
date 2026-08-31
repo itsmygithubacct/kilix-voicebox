@@ -68,6 +68,8 @@ class CuratedImportTests(unittest.TestCase):
         self.assertEqual(counts["current_source_risks"], 0)
         self.assertEqual(counts["current_blob_paths"],
                          counts["current_source_files"] + counts["owned_files"])
+        self.assertEqual(counts["current_worktree_blobs"],
+                         counts["current_blob_paths"])
         self.assertEqual(counts["replace_refs"], 0)
         self.assertEqual(counts["graft_files"], 0)
         self.assertEqual(counts["shallow_repositories"], 0)
@@ -298,6 +300,44 @@ class CuratedImportTests(unittest.TestCase):
                     "LICENCE_IDENTITY",
                 )
             self.assertEqual(caught.exception.code, "LICENCE_IDENTITY")
+
+    def test_worktree_blob_identity_refuses_clean_filter_smudge(self) -> None:
+        scratch = os.environ.get("TMPDIR")
+        with tempfile.TemporaryDirectory(
+            prefix="voicebox-clean-filter-", dir=scratch
+        ) as temp:
+            root = Path(temp)
+            self.initialize_repository(root)
+            attributes = root / ".gitattributes"
+            payload = root / "payload.txt"
+            attributes.write_text("payload.txt filter=mask\n", encoding="utf-8")
+            payload.write_text("malicious published bytes\n", encoding="utf-8")
+            self.commit_all(root)
+            verify.git(
+                root,
+                "config",
+                "filter.mask.clean",
+                "sed s/safe/malicious/",
+            )
+            verify.git(
+                root,
+                "config",
+                "filter.mask.smudge",
+                "sed s/malicious/safe/",
+            )
+            verify.git(root, "config", "filter.mask.required", "true")
+            payload.unlink()
+            verify.git(root, "checkout", "--", "payload.txt")
+            self.assertEqual(payload.read_text(encoding="utf-8"),
+                             "safe published bytes\n")
+            self.assertEqual(verify.git(root, "status", "--porcelain").stdout, b"")
+            shape = verify.verify_repository_shape(root)
+            self.assertEqual(shape["hidden_index_paths"], 0)
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_worktree_blob_identity(
+                    root, "HEAD", [".gitattributes", "payload.txt"]
+                )
+            self.assertEqual(caught.exception.code, "WORKTREE_BLOB_IDENTITY")
 
     def test_repository_shape_refuses_hidden_index_paths(self) -> None:
         scratch = os.environ.get("TMPDIR")
