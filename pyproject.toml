@@ -1,3 +1,7 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
 [project]
 name = "kilix-voicebox-backend"
 version = "0.1.12"
@@ -27,3 +31,11 @@ target-version = "py312"
 
 [tool.ruff.lint]
 select = ["E9", "F"]
+
+# Flat layout with several unrelated top-level directories (app, docs, tauri,
+# web, scripts, tools, mlx-test), so setuptools auto-discovery refuses to guess.
+# The Python distribution is the backend package only; the rest of the tree is
+# the desktop shell and its tooling and is not part of this wheel.
+[tool.setuptools.packages.find]
+include = ["backend*"]
+exclude = ["backend.tests*"]
