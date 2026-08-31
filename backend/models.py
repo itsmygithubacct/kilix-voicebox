@@ -2,7 +2,7 @@
 Pydantic models for request/response validation.
 """
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_serializer
 from typing import Optional, List
 from datetime import datetime
 
@@ -23,6 +23,11 @@ class VoiceProfileResponse(BaseModel):
     avatar_path: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+
+    @field_serializer("avatar_path")
+    def serialize_avatar_path(self, value: Optional[str]) -> Optional[str]:
+        """Expose a loopback API resource, never the private filesystem path."""
+        return f"/profiles/{self.id}/avatar" if value else None
 
     class Config:
         from_attributes = True
@@ -45,6 +50,11 @@ class ProfileSampleResponse(BaseModel):
     audio_path: str
     reference_text: str
 
+    @field_serializer("audio_path")
+    def serialize_audio_path(self, _value: str) -> str:
+        """Expose a loopback API resource, never the private filesystem path."""
+        return f"/samples/{self.id}"
+
     class Config:
         from_attributes = True
 
@@ -55,8 +65,8 @@ class GenerationRequest(BaseModel):
     text: str = Field(..., min_length=1, max_length=5000)
     language: str = Field(default="en", pattern="^(zh|en|ja|ko|de|fr|ru|pt|es|it)$")
     seed: Optional[int] = Field(None, ge=0)
-    model_size: Optional[str] = Field(default="1.7B", pattern="^(1\\.7B|0\\.6B)$")
     instruct: Optional[str] = Field(None, max_length=500)
+    consent_asserted: bool = False
 
 
 class GenerationResponse(BaseModel):
@@ -70,6 +80,11 @@ class GenerationResponse(BaseModel):
     seed: Optional[int]
     instruct: Optional[str]
     created_at: datetime
+
+    @field_serializer("audio_path")
+    def serialize_audio_path(self, _value: str) -> str:
+        """Expose a loopback API resource, never the private filesystem path."""
+        return f"/audio/{self.id}"
 
     class Config:
         from_attributes = True
@@ -96,6 +111,11 @@ class HistoryResponse(BaseModel):
     instruct: Optional[str]
     created_at: datetime
 
+    @field_serializer("audio_path")
+    def serialize_audio_path(self, _value: str) -> str:
+        """Expose a loopback API resource, never the private filesystem path."""
+        return f"/audio/{self.id}"
+
     class Config:
         from_attributes = True
 
@@ -120,54 +140,23 @@ class TranscriptionResponse(BaseModel):
 class HealthResponse(BaseModel):
     """Response model for health check."""
     status: str
-    model_loaded: bool
-    model_downloaded: Optional[bool] = None  # Whether model is cached/downloaded
-    model_size: Optional[str] = None  # Current model size if loaded
-    gpu_available: bool
-    gpu_type: Optional[str] = None  # GPU type (CUDA, MPS, or None)
-    vram_used_mb: Optional[float] = None
-    backend_type: Optional[str] = None  # Backend type (mlx or pytorch)
+    qwen_provider: str = "unavailable"
+    transcribe_provider: str = "unavailable"
 
 
 class ModelStatus(BaseModel):
-    """Response model for model status."""
-    model_name: str
+    """Read-only provider inventory projection."""
+    provider: str
+    model_id: str
     display_name: str
-    downloaded: bool
-    downloading: bool = False  # True if download is in progress
-    size_mb: Optional[float] = None
-    loaded: bool = False
+    installed: bool
+    resident: bool = False
+    installed_bytes: Optional[int] = None
 
 
 class ModelStatusListResponse(BaseModel):
     """Response model for model status list."""
     models: List[ModelStatus]
-
-
-class ModelDownloadRequest(BaseModel):
-    """Request model for triggering model download."""
-    model_name: str
-
-
-class ActiveDownloadTask(BaseModel):
-    """Response model for active download task."""
-    model_name: str
-    status: str
-    started_at: datetime
-
-
-class ActiveGenerationTask(BaseModel):
-    """Response model for active generation task."""
-    task_id: str
-    profile_id: str
-    text_preview: str
-    started_at: datetime
-
-
-class ActiveTasksResponse(BaseModel):
-    """Response model for active tasks."""
-    downloads: List[ActiveDownloadTask]
-    generations: List[ActiveGenerationTask]
 
 
 class AudioChannelCreate(BaseModel):
@@ -243,6 +232,11 @@ class StoryItemDetail(BaseModel):
     seed: Optional[int]
     instruct: Optional[str]
     generation_created_at: datetime
+
+    @field_serializer("audio_path")
+    def serialize_audio_path(self, _value: str) -> str:
+        """Expose a loopback API resource, never the private filesystem path."""
+        return f"/audio/{self.generation_id}"
 
     class Config:
         from_attributes = True

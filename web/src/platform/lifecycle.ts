@@ -1,26 +1,19 @@
-import type { PlatformLifecycle } from '@/platform/types';
+import type { PlatformLifecycle, ServerSession } from '@/platform/types';
 
 class WebLifecycle implements PlatformLifecycle {
   onServerReady?: () => void;
 
-  async startServer(_remote = false): Promise<string> {
-    // Web assumes server is running externally
-    // Return a default URL - this should be configured via env vars
-    const serverUrl = import.meta.env.VITE_SERVER_URL || 'http://localhost:17493';
+  async startServer(): Promise<ServerSession> {
+    const token = import.meta.env.VITE_VOICEBOX_SESSION_TOKEN ?? '';
+    if (!/^[0-9a-f]{64}$/.test(token)) {
+      throw new Error('VOICEBOX_SESSION_INVALID');
+    }
     this.onServerReady?.();
-    return serverUrl;
+    return { url: 'http://127.0.0.1:17493', token };
   }
 
   async stopServer(): Promise<void> {
     // No-op for web - server is managed externally
-  }
-
-  async setKeepServerRunning(_keep: boolean): Promise<void> {
-    // No-op for web
-  }
-
-  async setupWindowCloseHandler(): Promise<void> {
-    // No-op for web - no window close handling needed
   }
 }
 

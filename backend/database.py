@@ -4,11 +4,9 @@ SQLite database ORM using SQLAlchemy.
 
 from sqlalchemy import create_engine, Column, String, Integer, Float, DateTime, Text, ForeignKey, Boolean
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, Session
+from sqlalchemy.orm import sessionmaker
 from datetime import datetime
 import uuid
-from pathlib import Path
-
 from . import config
 
 Base = declarative_base()

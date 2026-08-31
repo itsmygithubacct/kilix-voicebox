@@ -188,13 +188,13 @@ export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
     return [...items].sort((a, b) => a.start_time_ms - b.start_time_ms);
   }, [items]);
 
-  const handlePlayPause = () => {
+  const handlePlayPause = useCallback(() => {
     if (isCurrentlyPlaying) {
       pause();
     } else {
       play(storyId, sortedItems);
     }
-  };
+  }, [isCurrentlyPlaying, pause, play, storyId, sortedItems]);
 
   const handleStop = () => {
     stop();
@@ -225,9 +225,9 @@ export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
   }, []);
 
   // Calculate effective duration (accounting for trims)
-  const getEffectiveDuration = (item: StoryItemDetail) => {
+  const getEffectiveDuration = useCallback((item: StoryItemDetail) => {
     return item.duration * 1000 - (item.trim_start_ms || 0) - (item.trim_end_ms || 0);
-  };
+  }, []);
 
   // Calculate total duration (using effective durations)
   const totalDurationMs = useMemo(() => {
@@ -313,7 +313,7 @@ export function StoryTrackEditor({ storyId, items }: StoryTrackEditorProps) {
     }
   }, [isResizing, handleResizeMove, handleResizeEnd]);
 
-  const handleTimelineClick = (e: React.MouseEvent<HTMLDivElement>) => {
+  const handleTimelineClick = (e: React.MouseEvent<HTMLElement>) => {
     if (!tracksRef.current || draggingItem || trimmingItem) return;
     const rect = tracksRef.current.getBoundingClientRect();
     const x = e.clientX - rect.left + tracksRef.current.scrollLeft;

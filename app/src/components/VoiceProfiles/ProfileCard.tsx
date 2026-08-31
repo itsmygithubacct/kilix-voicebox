@@ -12,10 +12,11 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog';
-import type { VoiceProfileResponse } from '@/lib/api/types';
+import { useToast } from '@/components/ui/use-toast';
+import { apiClient } from '@/lib/api/client';
+import type { DeletePreview, VoiceProfileResponse } from '@/lib/api/types';
 import { useDeleteProfile, useExportProfile } from '@/lib/hooks/useProfiles';
 import { cn } from '@/lib/utils/cn';
-import { useServerStore } from '@/stores/serverStore';
 import { useUIStore } from '@/stores/uiStore';
 
 interface ProfileCardProps {
@@ -24,6 +25,7 @@ interface ProfileCardProps {
 
 export function ProfileCard({ profile }: ProfileCardProps) {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
+  const [deletePreview, setDeletePreview] = useState<DeletePreview | null>(null);
   const [avatarError, setAvatarError] = useState(false);
   const deleteProfile = useDeleteProfile();
   const exportProfile = useExportProfile();
@@ -31,11 +33,11 @@ export function ProfileCard({ profile }: ProfileCardProps) {
   const setProfileDialogOpen = useUIStore((state) => state.setProfileDialogOpen);
   const selectedProfileId = useUIStore((state) => state.selectedProfileId);
   const setSelectedProfileId = useUIStore((state) => state.setSelectedProfileId);
-  const serverUrl = useServerStore((state) => state.serverUrl);
+  const { toast } = useToast();
 
   const isSelected = selectedProfileId === profile.id;
 
-  const avatarUrl = profile.avatar_path ? `${serverUrl}/profiles/${profile.id}/avatar` : null;
+  const avatarUrl = profile.avatar_path ? apiClient.getAvatarUrl(profile.id) : null;
 
   const handleSelect = () => {
     setSelectedProfileId(isSelected ? null : profile.id);
@@ -46,14 +48,25 @@ export function ProfileCard({ profile }: ProfileCardProps) {
     setProfileDialogOpen(true);
   };
 
-  const handleDeleteClick = (e: React.MouseEvent) => {
+  const handleDeleteClick = async (e: React.MouseEvent) => {
     e.stopPropagation();
-    setDeleteDialogOpen(true);
+    try {
+      const preview = await apiClient.getProfileDeletePreview(profile.id);
+      setDeletePreview(preview);
+      setDeleteDialogOpen(true);
+    } catch (error) {
+      toast({
+        title: 'Could not preview deletion',
+        description: error instanceof Error ? error.message : 'DELETE_PREVIEW_FAILED',
+        variant: 'destructive',
+      });
+    }
   };
 
   const handleDeleteConfirm = () => {
     deleteProfile.mutate(profile.id);
     setDeleteDialogOpen(false);
+    setDeletePreview(null);
   };
 
   const handleExport = (e: React.MouseEvent) => {
@@ -124,16 +137,36 @@ export function ProfileCard({ profile }: ProfileCardProps) {
         </CardContent>
       </Card>
 
-      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+      <Dialog
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          setDeleteDialogOpen(open);
+          if (!open) setDeletePreview(null);
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete Profile</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete "{profile.name}"? This action cannot be undone.
+              Move {deletePreview?.count ?? 0}/{deletePreview?.total ?? 0} owned entries for{' '}
+              {profile.name} to private recoverable trash?
             </DialogDescription>
+            {deletePreview && (
+              <ul className="max-h-32 overflow-y-auto rounded border p-2 text-xs text-muted-foreground">
+                {deletePreview.files.map((file) => (
+                  <li key={file}>{file}</li>
+                ))}
+              </ul>
+            )}
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDeleteDialogOpen(false)}>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDeleteDialogOpen(false);
+                setDeletePreview(null);
+              }}
+            >
               Cancel
             </Button>
             <Button

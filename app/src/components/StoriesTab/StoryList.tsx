@@ -29,6 +29,8 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
+import { apiClient } from '@/lib/api/client';
+import type { DeletePreview } from '@/lib/api/types';
 import { useStories, useCreateStory, useUpdateStory, useDeleteStory } from '@/lib/hooks/useStories';
 import { cn } from '@/lib/utils/cn';
 import { formatDate } from '@/lib/utils/format';
@@ -50,6 +52,7 @@ export function StoryList() {
     description?: string;
   } | null>(null);
   const [deletingStoryId, setDeletingStoryId] = useState<string | null>(null);
+  const [deletePreview, setDeletePreview] = useState<DeletePreview | null>(null);
   const [newStoryName, setNewStoryName] = useState('');
   const [newStoryDescription, setNewStoryDescription] = useState('');
   const { toast } = useToast();
@@ -134,9 +137,19 @@ export function StoryList() {
     );
   };
 
-  const handleDeleteClick = (storyId: string) => {
-    setDeletingStoryId(storyId);
-    setDeleteDialogOpen(true);
+  const handleDeleteClick = async (storyId: string) => {
+    try {
+      const preview = await apiClient.getStoryDeletePreview(storyId);
+      setDeletingStoryId(storyId);
+      setDeletePreview(preview);
+      setDeleteDialogOpen(true);
+    } catch (error) {
+      toast({
+        title: 'Unable to preview story deletion',
+        description: error instanceof Error ? error.message : 'STORY_DELETE_PREVIEW_FAILED',
+        variant: 'destructive',
+      });
+    }
   };
 
   const handleDeleteConfirm = () => {
@@ -150,6 +163,7 @@ export function StoryList() {
         }
         setDeleteDialogOpen(false);
         setDeletingStoryId(null);
+        setDeletePreview(null);
       },
       onError: (error) => {
         toast({
@@ -341,14 +355,27 @@ export function StoryList() {
       </Dialog>
 
       {/* Delete Story Confirmation Dialog */}
-      <AlertDialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+      <AlertDialog
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          setDeleteDialogOpen(open);
+          if (!open) setDeletePreview(null);
+        }}
+      >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+            <AlertDialogTitle>Move story to recoverable trash?</AlertDialogTitle>
             <AlertDialogDescription>
-              This will permanently delete the story and all its items. This action cannot be
-              undone.
+              Archive {deletePreview?.count ?? 0}/{deletePreview?.total ?? 0} owned records in
+              private recoverable trash.
             </AlertDialogDescription>
+            {deletePreview && (
+              <ul className="max-h-40 overflow-auto rounded border p-2 text-xs">
+                {deletePreview.files.map((file) => (
+                  <li key={file}>{file}</li>
+                ))}
+              </ul>
+            )}
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
@@ -358,7 +385,7 @@ export function StoryList() {
                 disabled={deleteStory.isPending}
                 className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               >
-                {deleteStory.isPending ? 'Deleting...' : 'Delete'}
+                {deleteStory.isPending ? 'Moving...' : 'Move to Trash'}
               </Button>
             </AlertDialogAction>
           </AlertDialogFooter>

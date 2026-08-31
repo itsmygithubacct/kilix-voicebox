@@ -1,7 +1,3 @@
-export function createAudioUrl(audioId: string, serverUrl: string): string {
-  return `${serverUrl}/audio/${audioId}`;
-}
-
 export function downloadAudio(url: string, filename: string): void {
   const link = document.createElement('a');
   link.href = url;

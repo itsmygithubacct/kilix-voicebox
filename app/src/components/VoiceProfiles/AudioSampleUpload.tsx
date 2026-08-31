@@ -48,9 +48,8 @@ export function AudioSampleUpload({
             }}
             className="hidden"
           />
-          <div
-            role="button"
-            tabIndex={0}
+          <fieldset
+            aria-label="Audio sample drop zone"
             onDragOver={(e) => {
               e.preventDefault();
               setIsDragging(true);
@@ -65,12 +64,6 @@ export function AudioSampleUpload({
               const droppedFile = e.dataTransfer.files?.[0];
               if (droppedFile?.type.startsWith('audio/')) {
                 onFileChange(droppedFile);
-              }
-            }}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter' || e.key === ' ') {
-                e.preventDefault();
-                fileInputRef.current?.click();
               }
             }}
             className={`flex flex-col items-center justify-center gap-4 p-4 border-2 rounded-lg transition-colors min-h-[180px] ${
@@ -138,7 +131,7 @@ export function AudioSampleUpload({
                 </div>
               </>
             )}
-          </div>
+          </fieldset>
         </div>
       </FormControl>
       <FormMessage />

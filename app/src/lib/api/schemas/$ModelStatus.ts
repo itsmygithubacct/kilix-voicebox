@@ -3,33 +3,34 @@
 /* tslint:disable */
 /* eslint-disable */
 export const $ModelStatus = {
-  description: `Response model for model status.`,
-  properties: {
-    model_name: {
-      type: 'string',
-      isRequired: true,
-    },
-    display_name: {
-      type: 'string',
-      isRequired: true,
-    },
-    downloaded: {
-      type: 'boolean',
-      isRequired: true,
-    },
-    size_mb: {
-      type: 'any-of',
-      contains: [
-        {
-          type: 'number',
+    description: `Read-only provider inventory projection.`,
+    properties: {
+        provider: {
+            type: 'string',
+            isRequired: true,
         },
-        {
-          type: 'null',
+        model_id: {
+            type: 'string',
+            isRequired: true,
         },
-      ],
+        display_name: {
+            type: 'string',
+            isRequired: true,
+        },
+        installed: {
+            type: 'boolean',
+            isRequired: true,
+        },
+        resident: {
+            type: 'boolean',
+        },
+        installed_bytes: {
+            type: 'any-of',
+            contains: [{
+                type: 'number',
+            }, {
+                type: 'null',
+            }],
+        },
     },
-    loaded: {
-      type: 'boolean',
-    },
-  },
 } as const;

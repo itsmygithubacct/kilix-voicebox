@@ -9,12 +9,12 @@ BACKEND_DIR := backend
 TAURI_DIR := tauri
 WEB_DIR := web
 APP_DIR := app
+BUN ?= bun
 
-# Python (prefer 3.12, fallback to 3.13, then python3)
+# Python dependencies are resolved only by the committed uv lock.
 PYTHON := $(shell command -v python3.12 2>/dev/null || command -v python3.13 2>/dev/null || echo python3)
-VENV := $(CURDIR)/$(BACKEND_DIR)/venv
+VENV := $(CURDIR)/.venv
 VENV_BIN := $(VENV)/bin
-PIP := $(VENV_BIN)/pip
 PYTHON_VENV := $(VENV_BIN)/python
 
 # Colors for output
@@ -34,7 +34,7 @@ help: ## Show this help message
 # SETUP
 # =============================================================================
 
-.PHONY: setup setup-js setup-python setup-rust
+.PHONY: setup setup-js setup-python sync-python setup-rust
 
 setup: setup-js setup-python ## Full project setup (all dependencies)
 	@echo -e "$(GREEN)✓ Setup complete!$(NC)"
@@ -42,37 +42,29 @@ setup: setup-js setup-python ## Full project setup (all dependencies)
 
 setup-js: ## Install JavaScript dependencies (bun)
 	@echo -e "$(BLUE)Installing JavaScript dependencies...$(NC)"
-	bun install
+	bun install --frozen-lockfile
 
-setup-python: $(VENV)/bin/activate ## Set up Python virtual environment and dependencies
+setup-python: ## Set up the locked Python environment
 	@echo -e "$(BLUE)Installing Python dependencies...$(NC)"
-	$(PIP) install --upgrade pip
-	$(PIP) install -r $(BACKEND_DIR)/requirements.txt
-	@if [ "$$(uname -m)" = "arm64" ] && [ "$$(uname)" = "Darwin" ]; then \
-		echo -e "$(BLUE)Detected Apple Silicon - installing MLX dependencies...$(NC)"; \
-		$(PIP) install -r $(BACKEND_DIR)/requirements-mlx.txt; \
-		echo -e "$(GREEN)✓ MLX backend enabled (native Metal acceleration)$(NC)"; \
-	fi
-	$(PIP) install git+https://github.com/QwenLM/Qwen3-TTS.git
+	uv sync --frozen --group dev
 	@echo -e "$(GREEN)✓ Python environment ready$(NC)"
 
-$(VENV)/bin/activate:
-	@echo -e "$(BLUE)Creating Python virtual environment...$(NC)"
-	@PY_MINOR=$$($(PYTHON) -c "import sys; print(sys.version_info[1])"); \
-	if [ "$$PY_MINOR" -gt 13 ]; then \
-		echo -e "$(YELLOW)Warning: Python 3.$$PY_MINOR detected. ML packages may not be compatible.$(NC)"; \
-		echo -e "$(YELLOW)Recommended: Use Python 3.12 or 3.13 (brew install python@3.12)$(NC)"; \
-	fi
-	$(PYTHON) -m venv $(VENV)
+sync-python: setup-python ## Alias for locked Python environment setup
 
-setup-rust: ## Install Rust toolchain (if not present)
-	@command -v rustc >/dev/null 2>&1 || curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+$(VENV)/bin/activate:
+	uv sync --frozen --group dev
+
+setup-rust: ## Verify the release-selected Rust toolchain is already installed
+	@command -v rustc >/dev/null 2>&1 || { \
+		echo "Rust is unavailable; install the release-selected toolchain out of band"; \
+		exit 1; \
+	}
 
 # =============================================================================
 # DEVELOPMENT
 # =============================================================================
 
-.PHONY: dev dev-backend dev-frontend dev-web kill-dev
+.PHONY: dev dev-backend dev-frontend dev-web
 
 dev: ## Start backend + desktop app (parallel)
 	@echo -e "$(BLUE)Starting development servers...$(NC)"
@@ -84,7 +76,11 @@ dev: ## Start backend + desktop app (parallel)
 
 dev-backend: ## Start FastAPI backend server
 	@echo -e "$(BLUE)Starting backend server on http://localhost:17493$(NC)"
-	$(VENV_BIN)/uvicorn backend.main:app --reload --port 17493
+	@test "$${#KILIX_VOICEBOX_SESSION_TOKEN}" -eq 64 || { \
+		echo "Set KILIX_VOICEBOX_SESSION_TOKEN to 32 random bytes in lowercase hex"; \
+		exit 1; \
+	}
+	uv run --frozen uvicorn backend.main:app --reload --host 127.0.0.1 --port 17493 --no-access-log
 
 dev-frontend: ## Start Tauri desktop app
 	@echo -e "$(BLUE)Starting Tauri desktop app...$(NC)"
@@ -96,12 +92,6 @@ dev-web: ## Start backend + web app (parallel)
 		$(MAKE) dev-backend & \
 		sleep 2 && cd $(WEB_DIR) && bun run dev & \
 		wait
-
-kill-dev: ## Kill all development processes
-	@echo -e "$(YELLOW)Killing development processes...$(NC)"
-	-pkill -f "uvicorn main:app" 2>/dev/null || true
-	-pkill -f "vite" 2>/dev/null || true
-	@echo -e "$(GREEN)✓ Processes killed$(NC)"
 
 # =============================================================================
 # BUILD
@@ -143,7 +133,6 @@ db-reset: ## Reset database (delete and reinitialize)
 
 generate-api: ## Generate TypeScript API client from OpenAPI schema
 	@echo -e "$(BLUE)Generating API client...$(NC)"
-	@echo -e "$(YELLOW)Note: Backend must be running (make dev-backend)$(NC)"
 	./scripts/generate-api.sh
 	@echo -e "$(GREEN)✓ API client generated in $(APP_DIR)/src/lib/api/$(NC)"
 
@@ -151,7 +140,7 @@ generate-api: ## Generate TypeScript API client from OpenAPI schema
 # CODE QUALITY
 # =============================================================================
 
-.PHONY: lint format typecheck check
+.PHONY: lint format typecheck check check-backend check-frontend check-kilix
 
 lint: ## Run linter (Biome)
 	@echo -e "$(BLUE)Linting...$(NC)"
@@ -165,9 +154,22 @@ typecheck: ## Run TypeScript type checking
 	@echo -e "$(BLUE)Type checking...$(NC)"
 	bun run tsc --noEmit
 
-check: ## Run all checks (Biome lint + format + type check)
-	@echo -e "$(BLUE)Running all checks...$(NC)"
-	bun run check
+check-kilix: ## Verify the provider-only Voicebox boundary
+	uv run --frozen python tools/check_kilix_boundary.py
+	uv run --frozen python tools/check_import_inventory.py
+
+check-backend: check-kilix ## Run backend compile and unit controls
+	uv run --frozen python -m compileall -q backend
+	uv run --frozen --group dev ruff check backend tools
+	uv run --frozen --group dev python -m unittest discover -s backend/tests -p 'test_*.py' -v
+
+check-frontend: ## Run deterministic frontend lint and type controls
+	$(BUN) run --cwd $(APP_DIR) lint
+	$(BUN) run --cwd $(APP_DIR) typecheck
+	$(BUN) run --cwd $(WEB_DIR) typecheck
+	$(BUN) run --cwd $(TAURI_DIR) typecheck
+
+check: check-backend check-frontend ## Run all provider-boundary, unit, lint, and type controls
 	@echo -e "$(GREEN)✓ All checks passed$(NC)"
 
 # =============================================================================
@@ -181,12 +183,7 @@ test: test-backend test-frontend ## Run all tests
 
 test-backend: ## Run Python backend tests (requires pytest)
 	@echo -e "$(BLUE)Running backend tests...$(NC)"
-	@if [ -f "$(VENV_BIN)/pytest" ]; then \
-		cd $(BACKEND_DIR) && $(VENV_BIN)/pytest -v; \
-	else \
-		echo -e "$(YELLOW)pytest not installed. Run: $(PIP) install pytest$(NC)"; \
-		exit 1; \
-	fi
+	uv run --frozen --group dev python -m unittest discover -s backend/tests -p 'test_*.py' -v
 
 test-frontend: ## Run frontend tests (requires test script in package.json)
 	@echo -e "$(BLUE)Running frontend tests...$(NC)"

@@ -2,17 +2,68 @@
 Generation history management module.
 """
 
-from typing import List, Optional, Tuple
+from typing import Optional
 from datetime import datetime
 import uuid
-import shutil
+import re
 from pathlib import Path
 from sqlalchemy.orm import Session
-from sqlalchemy import or_
 
-from .models import GenerationRequest, GenerationResponse, HistoryQuery, HistoryResponse, HistoryListResponse
-from .database import Generation as DBGeneration, VoiceProfile as DBVoiceProfile
+from .models import GenerationResponse, HistoryQuery, HistoryResponse, HistoryListResponse
+from .database import (
+    Generation as DBGeneration,
+    StoryItem as DBStoryItem,
+    VoiceProfile as DBVoiceProfile,
+)
 from . import config
+
+
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def owned_generation_path(generation: object) -> Path:
+    """Resolve generated audio only from its exact private provenance slot."""
+
+    generation_id = getattr(generation, "id", None)
+    audio_value = getattr(generation, "audio_path", None)
+    if (
+        type(generation_id) is not str
+        or _IDENTIFIER.fullmatch(generation_id) is None
+        or type(audio_value) is not str
+    ):
+        raise ValueError("generation path identity is invalid")
+    audio_path = Path(audio_value)
+    suffix = audio_path.suffix.lower()
+    if suffix not in {".wav", ".flac", ".opus"}:
+        raise ValueError("generation format is unsupported")
+    expected = config.get_privacy_dir() / "generations" / f"{generation_id}{suffix}"
+    if audio_path != expected:
+        raise ValueError("generation path is outside its owned slot")
+    return expected
+
+
+def generation_recovery_records(generation: DBGeneration) -> dict[str, dict]:
+    """Return the private catalog snapshot needed to restore one generation."""
+
+    audio_path = owned_generation_path(generation)
+    return {
+        f"database/generations/{generation.id}.json": {
+            "schema": "kilix.voicebox.generation-recovery/candidate-v1",
+            "id": generation.id,
+            "profile_id": generation.profile_id,
+            "text": generation.text,
+            "language": generation.language,
+            "audio_name": audio_path.name,
+            "duration": generation.duration,
+            "seed": generation.seed,
+            "instruct": generation.instruct,
+            "created_at": generation.created_at.isoformat(),
+        }
+    }
+
+
+def generation_is_in_story(generation_id: str, db: Session) -> bool:
+    return db.query(DBStoryItem).filter_by(generation_id=generation_id).first() is not None
 
 
 def _get_generations_dir() -> Path:
@@ -29,6 +80,7 @@ async def create_generation(
     seed: Optional[int],
     db: Session,
     instruct: Optional[str] = None,
+    generation_id: Optional[str] = None,
 ) -> GenerationResponse:
     """
     Create a new generation history entry.
@@ -47,7 +99,7 @@ async def create_generation(
         Created generation entry
     """
     db_generation = DBGeneration(
-        id=str(uuid.uuid4()),
+        id=generation_id or str(uuid.uuid4()),
         profile_id=profile_id,
         text=text,
         language=language,
@@ -170,48 +222,12 @@ async def delete_generation(
     if not generation:
         return False
     
-    # Delete audio file
-    audio_path = Path(generation.audio_path)
-    if audio_path.exists():
-        audio_path.unlink()
-    
-    # Delete from database
+    # Product bytes must already have moved to recoverable trash. This function
+    # only removes the relational index.
     db.delete(generation)
     db.commit()
     
     return True
-
-
-async def delete_generations_by_profile(
-    profile_id: str,
-    db: Session,
-) -> int:
-    """
-    Delete all generations for a profile.
-    
-    Args:
-        profile_id: Profile ID
-        db: Database session
-        
-    Returns:
-        Number of generations deleted
-    """
-    generations = db.query(DBGeneration).filter_by(profile_id=profile_id).all()
-    
-    count = 0
-    for generation in generations:
-        # Delete audio file
-        audio_path = Path(generation.audio_path)
-        if audio_path.exists():
-            audio_path.unlink()
-        
-        # Delete from database
-        db.delete(generation)
-        count += 1
-    
-    db.commit()
-    
-    return count
 
 
 async def get_generation_stats(db: Session) -> dict:

@@ -38,10 +38,7 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
   const getAudioContext = useCallback(() => {
     if (!audioContextRef.current) {
       audioContextRef.current = new AudioContext();
-      console.log(
-        '[StoryPlayback] Created AudioContext, sample rate:',
-        audioContextRef.current.sampleRate,
-      );
+      console.log('VOICEBOX_STORY_AUDIO_CONTEXT_READY');
 
       // Create master gain node for volume control
       masterGainRef.current = audioContextRef.current.createGain();
@@ -93,31 +90,21 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
     for (const item of items) {
       if (!audioBuffersRef.current.has(item.generation_id)) {
         const audioUrl = apiClient.getAudioUrl(item.generation_id);
-        console.log('[StoryPlayback] Preloading audio buffer:', item.generation_id);
-
         const preloadPromise = fetch(audioUrl)
           .then((response) => response.arrayBuffer())
           .then((arrayBuffer) => audioContext.decodeAudioData(arrayBuffer))
           .then((audioBuffer) => {
             audioBuffersRef.current.set(item.generation_id, audioBuffer);
-            console.log(
-              '[StoryPlayback] Preloaded buffer:',
-              item.generation_id,
-              'duration:',
-              audioBuffer.duration,
-            );
           })
-          .catch((err) => {
-            console.error('[StoryPlayback] Failed to preload audio:', item.generation_id, err);
+          .catch(() => {
+            console.error('VOICEBOX_STORY_AUDIO_PRELOAD_FAILED');
           });
 
         preloadPromises.push(preloadPromise);
       }
     }
 
-    Promise.all(preloadPromises).then(() => {
-      console.log('[StoryPlayback] Preloaded', audioBuffersRef.current.size, 'audio buffers');
-    });
+    void Promise.all(preloadPromises);
   }, [items, getAudioContext]);
 
   // Cleanup AudioContext on unmount
@@ -189,7 +176,6 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
 
   // Stop all sources
   const stopAllSources = useCallback(() => {
-    console.log('[StoryPlayback] Stopping all sources');
     for (const [itemId] of activeSourcesRef.current) {
       stopSource(itemId);
     }
@@ -218,13 +204,13 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
         if (!activeSourcesRef.current.has(item.id)) {
           const buffer = audioBuffersRef.current.get(item.generation_id);
           if (!buffer) {
-            console.warn('[StoryPlayback] Buffer not loaded for:', item.generation_id);
+            console.warn('VOICEBOX_STORY_AUDIO_BUFFER_UNAVAILABLE');
             continue;
           }
 
           // Calculate when this item should start in AudioContext time
           const itemStartContextTime = storyTimeToContextTime(item.start_time_ms);
-          
+
           // Calculate effective duration and trim offsets
           const trimStartSec = (item.trim_start_ms || 0) / 1000;
           const trimEndSec = (item.trim_end_ms || 0) / 1000;
@@ -239,16 +225,6 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
 
           // If the item should have already started, schedule it to start immediately
           const startAtContextTime = Math.max(currentContextTime, itemStartContextTime);
-
-          console.log('[StoryPlayback] Scheduling source:', {
-            itemId: item.id,
-            generationId: item.generation_id,
-            storyTimeMs,
-            itemStart: item.start_time_ms,
-            offsetIntoBuffer,
-            startAtContextTime,
-            duration,
-          });
 
           const source = audioContext.createBufferSource();
           source.buffer = buffer;
@@ -269,7 +245,6 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
 
           // Clean up when source ends
           source.onended = () => {
-            console.log('[StoryPlayback] Source ended:', item.id);
             activeSourcesRef.current.delete(item.id);
           };
         }
@@ -310,7 +285,6 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
       if (currentStoryTime >= totalDuration) {
         // Check if all sources have ended
         if (activeSourcesRef.current.size === 0) {
-          console.log('[StoryPlayback] Reached end');
           useStoryStore.getState().stop();
           return;
         }
@@ -347,7 +321,6 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
   // Handle play/pause changes - stop sources when paused
   useEffect(() => {
     if (!isPlaying) {
-      console.log('[StoryPlayback] Stopping playback');
       stopAllSources();
     }
   }, [isPlaying, stopAllSources]);
@@ -367,10 +340,6 @@ export function useStoryPlayback(items: StoryItemDetail[] | undefined) {
     const currentContextTime = audioContext.currentTime;
     const currentStoryTime = useStoryStore.getState().currentTimeMs;
 
-    console.log('[StoryPlayback] Setting timing anchors after seek:', {
-      contextTime: currentContextTime,
-      storyTime: currentStoryTime,
-    });
     setPlaybackTiming(currentContextTime, currentStoryTime);
 
     // Stop all existing sources and reschedule from new position

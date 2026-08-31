@@ -1,4 +1,4 @@
-import type { PlatformFilesystem, FileFilter } from '@/platform/types';
+import type { FileFilter, PlatformFilesystem } from '@/platform/types';
 
 export const tauriFilesystem: PlatformFilesystem = {
   async saveFile(filename: string, blob: Blob, filters?: FileFilter[]) {
@@ -25,8 +25,7 @@ export const tauriFilesystem: PlatformFilesystem = {
         const arrayBuffer = await blob.arrayBuffer();
         await writeFile(resolvedPath, new Uint8Array(arrayBuffer));
       }
-    } catch (error) {
-      console.error('Failed to use Tauri dialog, falling back to browser download:', error);
+    } catch {
       // Fall back to browser download if Tauri dialog fails
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');

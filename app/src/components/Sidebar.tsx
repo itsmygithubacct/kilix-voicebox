@@ -1,5 +1,5 @@
 import { Link, useMatchRoute } from '@tanstack/react-router';
-import { Box, BookOpen, Loader2, Mic, Server, Speaker, Volume2 } from 'lucide-react';
+import { BookOpen, Box, Loader2, Mic, Server, Speaker, Volume2 } from 'lucide-react';
 import voiceboxLogo from '@/assets/voicebox-logo.png';
 import { cn } from '@/lib/utils/cn';
 import { useGenerationStore } from '@/stores/generationStore';
@@ -40,11 +40,7 @@ export function Sidebar({ isMacOS }: SidebarProps) {
       <div className="flex flex-col gap-3">
         {tabs.map((tab) => {
           const Icon = tab.icon;
-          // For index route, use exact match; for others, use default matching
-          const isActive =
-            tab.path === '/'
-              ? matchRoute({ to: '/', exact: true })
-              : matchRoute({ to: tab.path });
+          const isActive = matchRoute({ to: tab.path });
 
           return (
             <Link

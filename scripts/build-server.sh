@@ -1,39 +1,37 @@
 #!/bin/bash
-# Build Python server binary for all platforms
+# Build the product-only Python sidecar from the committed uv lock.
 
-set -e
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+cd "$REPO_ROOT"
 
 # Determine platform
 PLATFORM=$(rustc --print host-tuple 2>/dev/null || echo "unknown")
 
 echo "Building voicebox-server for platform: $PLATFORM"
 
-# Build Python binary
-cd backend
-
-# Check if PyInstaller is installed
-if ! python -c "import PyInstaller" 2>/dev/null; then
-    echo "Installing PyInstaller..."
-    pip install pyinstaller
-fi
-
-# Build binary
-python build_binary.py
+# Never mutate the environment or resolve dependencies during a release build.
+uv run --frozen --group build python backend/build_binary.py
 
 # Create binaries directory if it doesn't exist
-mkdir -p ../tauri/src-tauri/binaries
+mkdir -p tauri/src-tauri/binaries
 
 # Copy binary with platform suffix
-if [ -f dist/voicebox-server ]; then
-    cp dist/voicebox-server ../tauri/src-tauri/binaries/voicebox-server-${PLATFORM}
-    chmod +x ../tauri/src-tauri/binaries/voicebox-server-${PLATFORM}
+if [ -f backend/dist/voicebox-server ]; then
+    cp backend/dist/voicebox-server "tauri/src-tauri/binaries/voicebox-server-${PLATFORM}"
+    chmod +x "tauri/src-tauri/binaries/voicebox-server-${PLATFORM}"
     echo "Built voicebox-server-${PLATFORM}"
-elif [ -f dist/voicebox-server.exe ]; then
-    cp dist/voicebox-server.exe ../tauri/src-tauri/binaries/voicebox-server-${PLATFORM}.exe
+elif [ -f backend/dist/voicebox-server.exe ]; then
+    cp backend/dist/voicebox-server.exe "tauri/src-tauri/binaries/voicebox-server-${PLATFORM}.exe"
     echo "Built voicebox-server-${PLATFORM}.exe"
 else
     echo "Error: Binary not found in dist/"
     exit 1
 fi
+
+cp backend/dist/voicebox-server.provenance.json \
+  "tauri/src-tauri/binaries/voicebox-server-${PLATFORM}.provenance.json"
 
 echo "Build complete!"

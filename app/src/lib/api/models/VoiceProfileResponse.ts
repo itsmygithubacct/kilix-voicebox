@@ -6,10 +6,11 @@
  * Response model for voice profile.
  */
 export type VoiceProfileResponse = {
-  id: string;
-  name: string;
-  description: string | null;
-  language: string;
-  created_at: string;
-  updated_at: string;
+    id: string;
+    name: string;
+    description: (string | null);
+    language: string;
+    avatar_path?: (string | null);
+    created_at: string;
+    updated_at: string;
 };

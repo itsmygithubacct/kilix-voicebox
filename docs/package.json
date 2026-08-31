@@ -4,12 +4,11 @@
   "private": true,
   "scripts": {
     "dev": "mintlify dev",
-    "build": "mintlify build",
-    "start": "mintlify serve",
-    "install:mintlify": "bun add -g mintlify"
+    "build": "mintlify validate",
+    "start": "mintlify serve"
   },
   "devDependencies": {
-    "mintlify": "latest"
+    "mintlify": "4.2.307"
   },
   "engines": {
     "bun": ">=1.0.0"

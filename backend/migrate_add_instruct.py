@@ -20,7 +20,7 @@ def migrate():
         db_path = Path.cwd() / "data" / "voicebox.db"
 
     if not db_path.exists():
-        print(f"Database not found at {db_path}, skipping migration")
+        print("Database unavailable; migration skipped")
         return
 
     conn = sqlite3.connect(db_path)

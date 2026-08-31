@@ -54,8 +54,8 @@ export function AudioTab() {
       }
       try {
         return await platform.audio.listOutputDevices();
-      } catch (error) {
-        console.error('Failed to list audio devices:', error);
+      } catch {
+        console.error('VOICEBOX_AUDIO_DEVICE_LIST_FAILED');
         return [];
       }
     },
@@ -341,7 +341,9 @@ export function AudioTab() {
             <div className="flex flex-col items-center justify-center py-12 border-2 border-dashed border-muted rounded-md">
               <CheckCircle2 className="h-12 w-12 text-muted-foreground mb-4" />
               <p className="text-muted-foreground text-center">
-                {platform.metadata.isTauri ? 'No audio devices found' : 'Audio device selection requires Tauri'}
+                {platform.metadata.isTauri
+                  ? 'No audio devices found'
+                  : 'Audio device selection requires Tauri'}
               </p>
             </div>
           )}

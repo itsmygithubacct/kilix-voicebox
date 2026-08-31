@@ -94,15 +94,13 @@ export function useSystemAudioCapture({
       const blob = await platform.audio.stopSystemAudioCapture();
 
       // Pass the actual recorded duration
-      const recordedDuration = startTimeRef.current 
-        ? (Date.now() - startTimeRef.current) / 1000 
+      const recordedDuration = startTimeRef.current
+        ? (Date.now() - startTimeRef.current) / 1000
         : undefined;
       onRecordingComplete?.(blob, recordedDuration);
     } catch (err) {
       const errorMessage =
-        err instanceof Error
-          ? err.message
-          : 'Failed to stop system audio capture.';
+        err instanceof Error ? err.message : 'Failed to stop system audio capture.';
       setError(errorMessage);
     }
   }, [isRecording, onRecordingComplete, platform]);
@@ -137,8 +135,8 @@ export function useSystemAudioCapture({
       // Cancel recording on unmount if still recording
       if (isRecordingRef.current && platform.metadata.isTauri) {
         // Call stop directly without the callback to avoid stale closure
-        platform.audio.stopSystemAudioCapture().catch((err) => {
-          console.error('Error stopping audio capture on unmount:', err);
+        platform.audio.stopSystemAudioCapture().catch(() => {
+          console.error('VOICEBOX_AUDIO_CAPTURE_STOP_FAILED');
         });
       }
     };

@@ -38,8 +38,8 @@ export const tauriAudio: PlatformAudio = {
   },
 
   stopPlayback(): void {
-    invoke('stop_audio_playback').catch((error) => {
-      console.error('Failed to stop audio playback:', error);
+    invoke('stop_audio_playback').catch(() => {
+      console.error('VOICEBOX_AUDIO_PLAYBACK_STOP_FAILED');
     });
   },
 };

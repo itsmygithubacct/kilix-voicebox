@@ -3,6 +3,7 @@ import { AnimatePresence, motion } from 'framer-motion';
 import { Loader2, SlidersHorizontal, Sparkles } from 'lucide-react';
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Form, FormControl, FormField, FormItem, FormMessage } from '@/components/ui/form';
 import {
   Select,
@@ -297,7 +298,7 @@ export function FloatingGenerateBox({
                 <div className="group relative">
                   <Button
                     type="submit"
-                    disabled={isPending || !selectedProfileId}
+                    disabled={isPending || !selectedProfileId || !form.watch('consentAsserted')}
                     className="h-10 w-10 rounded-full bg-accent hover:bg-accent/90 hover:scale-105 text-accent-foreground shadow-lg hover:shadow-accent/50 transition-all duration-200"
                     size="icon"
                   >
@@ -312,7 +313,9 @@ export function FloatingGenerateBox({
                       ? 'Generating...'
                       : !selectedProfileId
                         ? 'Select a voice profile first'
-                        : 'Generate speech'}
+                        : !form.watch('consentAsserted')
+                          ? 'Confirm voice consent first'
+                          : 'Generate speech'}
                   </span>
                 </div>
                 <AnimatePresence>
@@ -401,32 +404,24 @@ export function FloatingGenerateBox({
                       </FormItem>
                     )}
                   />
-
-                  <FormField
-                    control={form.control}
-                    name="modelSize"
-                    render={({ field }) => (
-                      <FormItem className="flex-1 space-y-0">
-                        <Select onValueChange={field.onChange} defaultValue={field.value}>
-                          <FormControl>
-                            <SelectTrigger className="h-8 text-xs bg-card border-border rounded-full hover:bg-background/50 transition-all">
-                              <SelectValue />
-                            </SelectTrigger>
-                          </FormControl>
-                          <SelectContent>
-                            <SelectItem value="1.7B" className="text-xs text-muted-foreground">
-                              Qwen3-TTS 1.7B
-                            </SelectItem>
-                            <SelectItem value="0.6B" className="text-xs text-muted-foreground">
-                              Qwen3-TTS 0.6B
-                            </SelectItem>
-                          </SelectContent>
-                        </Select>
-                        <FormMessage className="text-xs" />
-                      </FormItem>
-                    )}
-                  />
                 </div>
+                <FormField
+                  control={form.control}
+                  name="consentAsserted"
+                  render={({ field }) => (
+                    <FormItem className="mt-3">
+                      <div className="flex items-start gap-2 rounded-xl border border-border p-2">
+                        <FormControl>
+                          <Checkbox checked={field.value} onCheckedChange={field.onChange} />
+                        </FormControl>
+                        <span className="text-xs text-muted-foreground">
+                          I have the speaker's permission to use this sample for voice cloning.
+                        </span>
+                      </div>
+                      <FormMessage className="text-xs" />
+                    </FormItem>
+                  )}
+                />
               </motion.div>
             </AnimatePresence>
           </form>

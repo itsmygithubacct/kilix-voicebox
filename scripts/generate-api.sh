@@ -1,81 +1,63 @@
 #!/bin/bash
-# Generate OpenAPI TypeScript client from FastAPI schema
+# Generate the TypeScript client from an isolated, locked FastAPI process.
 
-set -e
+set -euo pipefail
 
-echo "Generating OpenAPI client..."
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(cd -- "$SCRIPT_DIR/.." && pwd)"
+RUNTIME_BASE="${XDG_RUNTIME_DIR:-/tmp}"
+RUNTIME_DIR="$(mktemp -d --tmpdir="$RUNTIME_BASE" kilix-voicebox-openapi.XXXXXXXX)"
+SOCKET_PATH="$RUNTIME_DIR/backend.sock"
+DATA_HOME="$RUNTIME_DIR/data"
+BACKEND_PID=""
+SESSION_TOKEN="$(uv run --frozen python -c 'import secrets; print(secrets.token_hex(32))')"
 
-# Check if backend is running
-if ! curl -s http://localhost:8000/openapi.json > /dev/null 2>&1; then
-    echo "Backend not running. Starting backend..."
-    cd backend
-    
-    # Check if virtual environment exists
-    if [ ! -d "venv" ]; then
-        echo "Creating virtual environment..."
-        python -m venv venv
+cleanup() {
+    if [ -n "$BACKEND_PID" ]; then
+        kill "$BACKEND_PID" 2>/dev/null || true
+        wait "$BACKEND_PID" 2>/dev/null || true
     fi
-    
-    source venv/bin/activate 2>/dev/null || source venv/Scripts/activate 2>/dev/null
-    
-    # Install dependencies if needed
-    if ! python -c "import fastapi" 2>/dev/null; then
-        echo "Installing backend dependencies..."
-        pip install -r requirements.txt
+    rm -rf -- "$RUNTIME_DIR"
+}
+trap cleanup EXIT INT TERM
+
+chmod 700 "$RUNTIME_DIR"
+install -d -m 700 "$DATA_HOME"
+cd "$REPO_ROOT"
+
+KILIX_VOICEBOX_SESSION_TOKEN="$SESSION_TOKEN" XDG_DATA_HOME="$DATA_HOME" \
+    uv run --frozen uvicorn backend.main:app --uds "$SOCKET_PATH" --no-access-log &
+BACKEND_PID=$!
+
+for _attempt in {1..30}; do
+    if curl --fail --silent --unix-socket "$SOCKET_PATH" \
+        -H "X-Kilix-Voicebox-Session: $SESSION_TOKEN" http://localhost/openapi.json \
+        > app/openapi.json; then
+        break
     fi
-    
-    # Start backend in background
-    echo "Starting backend server..."
-    uvicorn main:app --port 8000 &
-    BACKEND_PID=$!
-    
-    # Wait for server to be ready
-    echo "Waiting for server to start..."
-    for i in {1..30}; do
-        if curl -s http://localhost:8000/openapi.json > /dev/null 2>&1; then
-            break
-        fi
-        sleep 1
-    done
-    
-    if ! curl -s http://localhost:8000/openapi.json > /dev/null 2>&1; then
-        echo "Error: Backend failed to start"
-        kill $BACKEND_PID 2>/dev/null || true
+    if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
+        echo "OpenAPI backend exited before becoming ready" >&2
         exit 1
     fi
-    
-    echo "Backend started (PID: $BACKEND_PID)"
-    STARTED_BACKEND=true
-else
-    STARTED_BACKEND=false
+    sleep 1
+done
+
+if [ ! -s app/openapi.json ]; then
+    echo "OpenAPI schema was not produced" >&2
+    exit 1
 fi
 
-# Download OpenAPI schema
-echo "Downloading OpenAPI schema..."
-curl -s http://localhost:8000/openapi.json > app/openapi.json
+node -e '
+const schema = JSON.parse(require("fs").readFileSync("app/openapi.json", "utf8"));
+if (schema?.info?.title !== "Kilix Voicebox API") process.exit(1);
+'
 
-# Check if openapi-typescript-codegen is installed
-if ! bunx --bun openapi-typescript-codegen --version > /dev/null 2>&1; then
-    echo "Installing openapi-typescript-codegen..."
-    bun add -d openapi-typescript-codegen
-fi
-
-# Generate TypeScript client
-echo "Generating TypeScript client..."
 cd app
-bunx --bun openapi-typescript-codegen \
+npx --no-install openapi-typescript-codegen \
     --input openapi.json \
     --output src/lib/api \
     --client fetch \
     --useOptions \
     --exportSchemas true
 
-echo "API client generated in app/src/lib/api"
-
-# Clean up
-if [ "$STARTED_BACKEND" = true ]; then
-    echo "Stopping backend server..."
-    kill $BACKEND_PID 2>/dev/null || true
-fi
-
-echo "Done!"
+echo "Generated the Voicebox API client from 1/1 isolated schema source."

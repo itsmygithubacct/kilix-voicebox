@@ -80,14 +80,3 @@ export function useExportGenerationAudio() {
     },
   });
 }
-
-export function useImportGeneration() {
-  const queryClient = useQueryClient();
-
-  return useMutation({
-    mutationFn: (file: File) => apiClient.importGeneration(file),
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ['history'] });
-    },
-  });
-}

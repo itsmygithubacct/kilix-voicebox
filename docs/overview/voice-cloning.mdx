@@ -1,75 +1,16 @@
 ---
-title: "Voice Cloning"
-description: "Clone any voice from just a few seconds of audio"
+title: "Consent-bound voice cloning"
+description: "Clone requests through kilix-qwen-tts"
 ---
 
-## Overview
+A profile holds one private source sample and its reference text. Generation is
+refused until the user explicitly asserts consent for the request.
 
-Voicebox uses **Qwen3-TTS** from Alibaba to achieve near-perfect voice cloning from just a few seconds of audio. The model captures prosody, emotion, and natural cadence.
+Voicebox canonicalizes the sample, records its source and container digests,
+capture time, and allowed use, then sends the provider a bounded anonymous
+descriptor. Successful output is accepted only when the provider returns the
+same source and consent bindings plus its actual model identifier and revision.
 
-## How It Works
-
-<Steps>
-  <Step title="Upload or Record Sample">
-    Provide 10-30 seconds of clear speech from the target voice
-  </Step>
-  <Step title="Model Analysis">
-    Qwen3-TTS analyzes vocal characteristics, tone, and speaking patterns
-  </Step>
-  <Step title="Voice Profile Created">
-    The model generates a voice embedding for synthesis
-  </Step>
-  <Step title="Generate Speech">
-    Use the profile to generate any text in the cloned voice
-  </Step>
-</Steps>
-
-## Best Practices
-
-### Sample Quality
-
-<CardGroup cols={2}>
-  <Card title="Do" icon="check">
-    - Use 10-30 seconds of audio
-    - Clear, consistent speaking
-    - Minimal background noise
-    - Natural speaking pace
-  </Card>
-  <Card title="Don't" icon="xmark">
-    - Very short clips (< 5 seconds)
-    - Heavy background noise
-    - Music or overlapping voices
-    - Heavily processed audio
-  </Card>
-</CardGroup>
-
-### Multiple Samples
-
-Adding multiple samples from the same speaker can improve quality:
-
-- Different speaking styles (casual, formal)
-- Different emotions (happy, serious)
-- Different recording conditions
-
-<Tip>
-  The model will learn a more robust representation from diverse samples.
-</Tip>
-
-## Supported Languages
-
-Currently supported:
-- English
-- Chinese (Mandarin)
-
-More languages coming soon.
-
-## Limitations
-
-<Warning>
-  Voice cloning should only be used with consent. Ensure you have permission to clone someone's voice.
-</Warning>
-
-- Quality depends on sample clarity
-- Works best with consistent speaking tone
-- May struggle with extreme accents or speech impediments
-- Background noise reduces quality
+The product stores private output provenance and a reverse derived-output link.
+Deleting a generation first previews the owned files and then moves audio,
+provenance, and the consent link to recoverable private trash.

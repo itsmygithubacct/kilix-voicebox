@@ -23,7 +23,48 @@ from .models import (
 )
 from .database import Story as DBStory, StoryItem as DBStoryItem, Generation as DBGeneration, VoiceProfile as DBVoiceProfile
 from .utils.audio import load_audio, save_audio
+from .history import owned_generation_path
+from .private_store import PrivateVoiceStore
+from . import config
 import numpy as np
+
+
+MAX_RECOVERABLE_STORY_ITEMS = 4_096
+
+
+def _story_delete_records(story: DBStory, db: Session) -> dict[str, dict]:
+    items = (
+        db.query(DBStoryItem)
+        .filter_by(story_id=story.id)
+        .order_by(DBStoryItem.id)
+        .limit(MAX_RECOVERABLE_STORY_ITEMS + 1)
+        .all()
+    )
+    if len(items) > MAX_RECOVERABLE_STORY_ITEMS:
+        raise ValueError("STORY_RECOVERY_LIMIT")
+    records: dict[str, dict] = {
+        f"database/stories/{story.id}.json": {
+            "schema": "kilix.voicebox.story-recovery/candidate-v1",
+            "id": story.id,
+            "name": story.name,
+            "description": story.description,
+            "created_at": story.created_at.isoformat(),
+            "updated_at": story.updated_at.isoformat(),
+        }
+    }
+    for item in items:
+        records[f"database/story-items/{item.id}.json"] = {
+            "schema": "kilix.voicebox.story-item-recovery/candidate-v1",
+            "id": item.id,
+            "story_id": item.story_id,
+            "generation_id": item.generation_id,
+            "start_time_ms": item.start_time_ms,
+            "track": item.track,
+            "trim_start_ms": item.trim_start_ms,
+            "trim_end_ms": item.trim_end_ms,
+            "created_at": item.created_at.isoformat(),
+        }
+    return records
 
 
 async def create_story(
@@ -188,23 +229,45 @@ async def update_story(
     return response
 
 
+async def preview_story_delete(
+    story_id: str,
+    db: Session,
+) -> Optional[dict]:
+    """Preview the exact database records archived by story deletion."""
+
+    story = db.query(DBStory).filter_by(id=story_id).first()
+    if not story:
+        return None
+    records = _story_delete_records(story, db)
+    files = PrivateVoiceStore(config.get_privacy_dir()).preview_record_archive(records)
+    return {"files": list(files), "count": len(files)}
+
+
 async def delete_story(
     story_id: str,
     db: Session,
-) -> bool:
+) -> Optional[dict]:
     """
-    Delete a story and all its items.
+    Archive a story and all its items to private recoverable trash.
 
     Args:
         story_id: Story ID
         db: Database session
 
     Returns:
-        True if deleted, False if not found
+        Recovery receipt, or None if not found
     """
     story = db.query(DBStory).filter_by(id=story_id).first()
     if not story:
-        return False
+        return None
+
+    records = _story_delete_records(story, db)
+    receipt = PrivateVoiceStore(config.get_privacy_dir()).archive_records(
+        kind="story",
+        object_id=story_id,
+        records=records,
+        metadata={"item_count": len(records) - 1, "name": story.name},
+    )
 
     # Delete all items
     db.query(DBStoryItem).filter_by(story_id=story_id).delete()
@@ -213,7 +276,7 @@ async def delete_story(
     db.delete(story)
     db.commit()
 
-    return True
+    return receipt
 
 
 async def add_item_to_story(
@@ -877,11 +940,10 @@ async def export_story_audio(
     sample_rate = 24000  # Default sample rate
 
     for item, generation in items:
-        audio_path = Path(generation.audio_path)
-        if not audio_path.exists():
-            continue
-
         try:
+            audio_path = owned_generation_path(generation)
+            if not audio_path.exists():
+                continue
             audio, sr = load_audio(str(audio_path), sample_rate=sample_rate)
             sample_rate = sr  # Use actual sample rate from first file
             

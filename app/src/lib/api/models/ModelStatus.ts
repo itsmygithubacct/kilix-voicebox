@@ -3,13 +3,13 @@
 /* tslint:disable */
 /* eslint-disable */
 /**
- * Response model for model status.
+ * Read-only provider inventory projection.
  */
 export type ModelStatus = {
-  model_name: string;
-  display_name: string;
-  downloaded: boolean;
-  downloading?: boolean;  // True if download is in progress
-  size_mb?: number | null;
-  loaded?: boolean;
+    provider: string;
+    model_id: string;
+    display_name: string;
+    installed: boolean;
+    resident?: boolean;
+    installed_bytes?: (number | null);
 };

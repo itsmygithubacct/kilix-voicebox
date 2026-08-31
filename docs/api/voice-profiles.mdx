@@ -93,6 +93,12 @@ PUT /profiles/{id}
 
 ### Delete Profile
 
+Preview the exact file and catalog-record population before deletion:
+
+```http
+GET /profiles/{id}/delete-preview
+```
+
 ```http
 DELETE /profiles/{id}
 ```
@@ -100,7 +106,10 @@ DELETE /profiles/{id}
 **Response:**
 ```json
 {
-  "success": true
+  "batch_id": "profile-abc123-opaque",
+  "files": ["profiles/abc123/", "database/profiles/abc123.json"],
+  "count": 2,
+  "total": 2
 }
 ```
 

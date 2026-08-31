@@ -33,7 +33,8 @@ export interface GenerationRequest {
   text: string;
   language: LanguageCode;
   seed?: number;
-  model_size?: '1.7B' | '0.6B';
+  instruct?: string;
+  consent_asserted: boolean;
 }
 
 export interface GenerationResponse {
@@ -63,6 +64,17 @@ export interface HistoryListResponse {
   total: number;
 }
 
+export interface DeletePreview {
+  files: string[];
+  count: number;
+  total: number;
+}
+
+export interface DeleteReceipt extends DeletePreview {
+  batch_id: string;
+  message: string;
+}
+
 export interface TranscriptionRequest {
   language?: LanguageCode;
 }
@@ -74,57 +86,21 @@ export interface TranscriptionResponse {
 
 export interface HealthResponse {
   status: string;
-  model_loaded: boolean;
-  model_downloaded?: boolean;
-  model_size?: string;
-  gpu_available: boolean;
-  vram_used_mb?: number;
-}
-
-export interface ModelProgress {
-  model_name: string;
-  current: number;
-  total: number;
-  progress: number;
-  filename?: string;
-  status: 'downloading' | 'extracting' | 'complete' | 'error';
-  timestamp: string;
-  error?: string;
+  qwen_provider?: string;
+  transcribe_provider?: string;
 }
 
 export interface ModelStatus {
-  model_name: string;
+  provider: string;
+  model_id: string;
   display_name: string;
-  downloaded: boolean;
-  downloading: boolean;  // True if download is in progress
-  size_mb?: number;
-  loaded: boolean;
+  installed: boolean;
+  resident: boolean;
+  installed_bytes?: number;
 }
 
 export interface ModelStatusListResponse {
   models: ModelStatus[];
-}
-
-export interface ModelDownloadRequest {
-  model_name: string;
-}
-
-export interface ActiveDownloadTask {
-  model_name: string;
-  status: string;
-  started_at: string;
-}
-
-export interface ActiveGenerationTask {
-  task_id: string;
-  profile_id: string;
-  text_preview: string;
-  started_at: string;
-}
-
-export interface ActiveTasksResponse {
-  downloads: ActiveDownloadTask[];
-  generations: ActiveGenerationTask[];
 }
 
 export interface StoryCreate {

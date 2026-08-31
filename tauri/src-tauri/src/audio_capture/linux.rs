@@ -1,14 +1,14 @@
 use crate::audio_capture::AudioCaptureState;
 
 pub async fn start_capture(
-    state: &AudioCaptureState,
-    max_duration_secs: u32,
+    _state: &AudioCaptureState,
+    _max_duration_secs: u32,
 ) -> Result<(), String> {
-    todo!("implement Linux audio capture")
+    Err("VOICEBOX_SYSTEM_AUDIO_UNSUPPORTED".to_string())
 }
 
-pub async fn stop_capture(state: &AudioCaptureState) -> Result<String, String> {
-    todo!("implement Linux audio capture stop")
+pub async fn stop_capture(_state: &AudioCaptureState) -> Result<String, String> {
+    Err("VOICEBOX_SYSTEM_AUDIO_UNSUPPORTED".to_string())
 }
 
 pub fn is_supported() -> bool {

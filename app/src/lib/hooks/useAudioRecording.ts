@@ -41,12 +41,7 @@ export function useAudioRecording({
         await new Promise((resolve) => setTimeout(resolve, 100));
 
         if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          console.error('MediaDevices check:', {
-            hasNavigator: typeof navigator !== 'undefined',
-            hasMediaDevices: !!navigator?.mediaDevices,
-            hasGetUserMedia: !!navigator?.mediaDevices?.getUserMedia,
-            isTauri: platform.metadata.isTauri,
-          });
+          console.error('VOICEBOX_MEDIA_DEVICES_UNAVAILABLE');
 
           const errorMsg = platform.metadata.isTauri
             ? 'Microphone access is not available. Please ensure:\n1. The app has microphone permissions in System Settings (macOS: System Settings > Privacy & Security > Microphone)\n2. You restart the app after granting permissions\n3. You are using Tauri v2 with a webview that supports getUserMedia'
@@ -98,8 +93,8 @@ export function useAudioRecording({
             ? (Date.now() - startTimeRef.current) / 1000
             : undefined;
           onRecordingComplete?.(wavBlob, recordedDuration);
-        } catch (err) {
-          console.error('Error converting audio to WAV:', err);
+        } catch {
+          console.error('VOICEBOX_AUDIO_CONVERSION_FAILED');
           // Fallback to original blob if conversion fails
           const recordedDuration = startTimeRef.current
             ? (Date.now() - startTimeRef.current) / 1000
@@ -114,9 +109,9 @@ export function useAudioRecording({
         streamRef.current = null;
       };
 
-      mediaRecorder.onerror = (event) => {
+      mediaRecorder.onerror = () => {
         setError('Recording error occurred');
-        console.error('MediaRecorder error:', event);
+        console.error('VOICEBOX_MEDIA_RECORDER_FAILED');
       };
 
       // Start recording
@@ -151,7 +146,7 @@ export function useAudioRecording({
       setError(errorMessage);
       setIsRecording(false);
     }
-  }, [maxDurationSeconds, onRecordingComplete]);
+  }, [maxDurationSeconds, onRecordingComplete, platform.metadata.isTauri]);
 
   const stopRecording = useCallback(() => {
     if (mediaRecorderRef.current && isRecording) {

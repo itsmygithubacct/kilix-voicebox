@@ -12,7 +12,7 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "createUpdaterArtifacts": true,
+    "createUpdaterArtifacts": false,
     "externalBin": ["binaries/voicebox-server"],
     "icon": [
       "icons/32x32.png",
@@ -30,7 +30,7 @@
   },
   "app": {
     "security": {
-      "csp": null,
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost http://127.0.0.1:17493 ws://127.0.0.1:5173; img-src 'self' asset: http://asset.localhost data: blob:; media-src 'self' asset: http://asset.localhost data: blob:; font-src 'self' data:; style-src 'self' 'unsafe-inline'; script-src 'self'",
       "capabilities": ["default"]
     },
     "windows": [
@@ -42,20 +42,11 @@
         "minHeight": 600,
         "resizable": true,
         "fullscreen": false,
-        "devtools": true,
+        "devtools": false,
         "userAgent": null,
         "titleBarStyle": "Overlay"
       }
     ],
-    "withGlobalTauri": true
-  },
-  "plugins": {
-    "shell": {
-      "open": true
-    },
-    "updater": {
-      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IEUxRENBQkRBQjdBNTM1OTIKUldTU05hVzMycXZjNGJGcUxmcVVocll2QjdSaTJNdlFxR2M3VDJsMnVvbDdyZGRPMmRlOW9aWTcK",
-      "endpoints": ["https://github.com/jamiepine/voicebox/releases/latest/download/latest.json"]
-    }
+    "withGlobalTauri": false
   }
 }

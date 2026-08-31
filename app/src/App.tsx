@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from 'react';
 import voiceboxLogo from '@/assets/voicebox-logo.png';
 import ShinyText from '@/components/ShinyText';
 import { TitleBarDragRegion } from '@/components/TitleBarDragRegion';
-import { useAutoUpdater } from '@/hooks/useAutoUpdater';
 import { TOP_SAFE_AREA_PADDING } from '@/lib/constants/ui';
 import { cn } from '@/lib/utils/cn';
 import { usePlatform } from '@/platform/PlatformContext';
@@ -11,26 +10,26 @@ import { router } from '@/router';
 import { useServerStore } from '@/stores/serverStore';
 
 const LOADING_MESSAGES = [
-  'Warming up tensors...',
-  'Calibrating synthesizer engine...',
-  'Initializing voice models...',
-  'Loading neural networks...',
+  'Preparing private storage...',
+  'Starting local orchestration...',
+  'Checking speech providers...',
+  'Opening the audio workspace...',
   'Preparing audio pipelines...',
-  'Optimizing waveform generators...',
+  'Checking provider endpoints...',
   'Tuning frequency analyzers...',
-  'Building voice embeddings...',
-  'Configuring text-to-speech cores...',
+  'Preparing voice profiles...',
+  'Configuring local speech services...',
   'Syncing audio buffers...',
   'Establishing model connections...',
-  'Preprocessing training data...',
+  'Checking consent records...',
   'Validating voice samples...',
-  'Compiling inference engines...',
+  'Validating provider contracts...',
   'Mapping phoneme sequences...',
   'Aligning prosody parameters...',
   'Activating speech synthesis...',
-  'Fine-tuning acoustic models...',
+  'Preparing generation provenance...',
   'Preparing voice cloning matrices...',
-  'Initializing Qwen TTS framework...',
+  'Connecting to Kilix providers...',
 ];
 
 function App() {
@@ -38,21 +37,6 @@ function App() {
   const [serverReady, setServerReady] = useState(false);
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
   const serverStartingRef = useRef(false);
-
-  // Automatically check for app updates on startup and show toast notifications
-  useAutoUpdater({ checkOnMount: true, showToast: true });
-
-  // Sync stored setting to Rust on startup
-  useEffect(() => {
-    if (platform.metadata.isTauri) {
-      const keepRunning = useServerStore.getState().keepServerRunningOnClose;
-      platform.lifecycle.setKeepServerRunning(keepRunning).catch((error) => {
-        console.error('Failed to sync initial setting to Rust:', error);
-      });
-    }
-    // Empty dependency array - platform is stable from context, only run once
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [platform.metadata.isTauri, platform.lifecycle]);
 
   // Setup lifecycle callbacks
   useEffect(() => {
@@ -70,20 +54,11 @@ function App() {
       return;
     }
 
-    // Setup window close handler to check setting and stop server if needed
-    // This works in both dev and prod, but will only stop server if it was started by the app
-    platform.lifecycle.setupWindowCloseHandler().catch((error) => {
-      console.error('Failed to setup window close handler:', error);
-    });
-
     // Only auto-start server in production mode
     // In dev mode, user runs server separately
     if (!import.meta.env?.PROD) {
-      console.log('Dev mode: Skipping auto-start of server (run it separately)');
+      console.log('VOICEBOX_DEVELOPMENT_SERVER_EXTERNAL');
       setServerReady(true); // Mark as ready so UI doesn't show loading screen
-      // Mark that server was not started by app (so we don't try to stop it on close)
-      // @ts-expect-error - adding property to window
-      window.__voiceboxServerStartedByApp = false;
       return;
     }
 
@@ -93,30 +68,22 @@ function App() {
     }
 
     serverStartingRef.current = true;
-    console.log('Production mode: Starting bundled server...');
+    console.log('VOICEBOX_SIDECAR_STARTING');
 
     platform.lifecycle
-      .startServer(false)
-      .then((serverUrl) => {
-        console.log('Server is ready at:', serverUrl);
-        // Update the server URL in the store with the dynamically assigned port
-        useServerStore.getState().setServerUrl(serverUrl);
+      .startServer()
+      .then((serverSession) => {
+        console.log('VOICEBOX_SIDECAR_READY');
+        useServerStore.getState().setServerSession(serverSession);
         setServerReady(true);
-        // Mark that we started the server (so we know to stop it on close)
-        // @ts-expect-error - adding property to window
-        window.__voiceboxServerStartedByApp = true;
       })
-      .catch((error) => {
-        console.error('Failed to auto-start server:', error);
+      .catch(() => {
         serverStartingRef.current = false;
-        // @ts-expect-error - adding property to window
-        window.__voiceboxServerStartedByApp = false;
       });
 
     // Cleanup: stop server on actual unmount (not StrictMode remount)
     // Note: Window close is handled separately in Tauri Rust code
     return () => {
-      // Window close event handles server shutdown based on setting
       serverStartingRef.current = false;
     };
     // Empty dependency array - platform is stable from context, only run once

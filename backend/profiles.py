@@ -5,31 +5,115 @@ Voice profile management module.
 from typing import List, Optional
 from datetime import datetime
 import uuid
-import shutil
+import os
+import re
 from pathlib import Path
 from sqlalchemy.orm import Session
-from sqlalchemy import select
 
 from .models import (
     VoiceProfileCreate,
     VoiceProfileResponse,
-    ProfileSampleCreate,
     ProfileSampleResponse,
 )
 from .database import (
     VoiceProfile as DBVoiceProfile,
     ProfileSample as DBProfileSample,
+    Generation as DBGeneration,
+    ProfileChannelMapping,
 )
 from .utils.audio import validate_reference_audio, load_audio, save_audio
 from .utils.images import validate_image, process_avatar
-from .utils.cache import _get_cache_dir, clear_profile_cache
-from .tts import get_tts_model
+from .utils.cache import clear_profile_cache
 from . import config
+from .private_store import PrivateVoiceStore
+
+
+_IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
+
+
+def _safe_identifier(value: str) -> str:
+    if type(value) is not str or _IDENTIFIER.fullmatch(value) is None:
+        raise ValueError("unsafe product identifier")
+    return value
+
+
+def owned_sample_path(sample: DBProfileSample) -> Path:
+    """Resolve a sample only when its database path matches its exact XDG slot."""
+
+    expected = (
+        _get_profiles_dir()
+        / _safe_identifier(sample.profile_id)
+        / f"{_safe_identifier(sample.id)}.wav"
+    )
+    if Path(sample.audio_path) != expected:
+        raise ValueError("sample path is outside its owned slot")
+    return expected
+
+
+def owned_avatar_path(profile: DBVoiceProfile) -> Path | None:
+    """Resolve an avatar only when it is an admitted file in its exact profile slot."""
+
+    if not profile.avatar_path:
+        return None
+    candidate = Path(profile.avatar_path)
+    expected_parent = _get_profiles_dir() / _safe_identifier(profile.id)
+    if candidate.parent != expected_parent or candidate.name not in {
+        "avatar.jpeg", "avatar.jpg", "avatar.png", "avatar.webp"
+    }:
+        raise ValueError("avatar path is outside its owned slot")
+    return candidate
 
 
 def _get_profiles_dir() -> Path:
     """Get profiles directory from config."""
     return config.get_profiles_dir()
+
+
+def _profile_record(profile: DBVoiceProfile) -> dict:
+    return {
+        "schema": "kilix.voicebox.profile-recovery/candidate-v1",
+        "id": profile.id,
+        "name": profile.name,
+        "description": profile.description,
+        "language": profile.language,
+        "avatar_name": Path(profile.avatar_path).name if profile.avatar_path else None,
+        "created_at": profile.created_at.isoformat(),
+        "updated_at": profile.updated_at.isoformat(),
+    }
+
+
+def _sample_record(sample: DBProfileSample) -> dict:
+    return {
+        "schema": "kilix.voicebox.profile-sample-recovery/candidate-v1",
+        "id": sample.id,
+        "profile_id": sample.profile_id,
+        "audio_name": owned_sample_path(sample).name,
+        "reference_text": sample.reference_text,
+    }
+
+
+def _profile_delete_records(
+    profile: DBVoiceProfile,
+    samples: list[DBProfileSample],
+    mappings: list[ProfileChannelMapping],
+) -> dict[str, dict]:
+    records = {f"database/profiles/{profile.id}.json": _profile_record(profile)}
+    records.update(
+        (f"database/profile-samples/{sample.id}.json", _sample_record(sample))
+        for sample in samples
+    )
+    records.update(
+        (
+            f"database/profile-channels/{mapping.profile_id}-{mapping.channel_id}.json",
+            {
+                "schema": "kilix.voicebox.profile-channel-recovery/candidate-v1",
+                "profile_id": mapping.profile_id,
+                "channel_id": mapping.channel_id,
+            },
+        )
+        for mapping in mappings
+    )
+    return records
 
 
 async def create_profile(
@@ -62,7 +146,8 @@ async def create_profile(
     
     # Create profile directory
     profile_dir = _get_profiles_dir() / db_profile.id
-    profile_dir.mkdir(parents=True, exist_ok=True)
+    profile_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(profile_dir, 0o700, follow_symlinks=False)
     
     return VoiceProfileResponse.model_validate(db_profile)
 
@@ -97,13 +182,15 @@ async def add_profile_sample(
     
     # Create sample ID and directory
     sample_id = str(uuid.uuid4())
-    profile_dir = _get_profiles_dir() / profile_id
-    profile_dir.mkdir(parents=True, exist_ok=True)
+    profile_dir = _get_profiles_dir() / _safe_identifier(profile_id)
+    profile_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(profile_dir, 0o700, follow_symlinks=False)
     
     # Copy audio file to profile directory
     dest_path = profile_dir / f"{sample_id}.wav"
     audio, sr = load_audio(audio_path)
     save_audio(audio, str(dest_path), sr)
+    os.chmod(dest_path, 0o600, follow_symlinks=False)
     
     # Create database entry
     db_sample = DBProfileSample(
@@ -216,77 +303,95 @@ async def update_profile(
     return VoiceProfileResponse.model_validate(profile)
 
 
-async def delete_profile(
+async def preview_profile_delete(
     profile_id: str,
     db: Session,
-) -> bool:
-    """
-    Delete a voice profile and all associated data.
-    
-    Args:
-        profile_id: Profile ID
-        db: Database session
-        
-    Returns:
-        True if deleted, False if not found
-    """
+) -> Optional[dict]:
+    """Preview a profile deletion, refusing profiles referenced by generations."""
+
     profile = db.query(DBVoiceProfile).filter_by(id=profile_id).first()
     if not profile:
-        return False
-    
-    # Delete samples from database
+        return None
+    if db.query(DBGeneration).filter_by(profile_id=profile_id).first() is not None:
+        raise ValueError("PROFILE_IN_USE")
+    samples = db.query(DBProfileSample).filter_by(profile_id=profile_id).all()
+    mappings = db.query(ProfileChannelMapping).filter_by(profile_id=profile_id).all()
+    records = _profile_delete_records(profile, samples, mappings)
+    profile_dir = _get_profiles_dir() / _safe_identifier(profile_id)
+    files = PrivateVoiceStore(config.get_privacy_dir()).preview_owned_delete(
+        (profile_dir,), records=records
+    )
+    return {"files": list(files), "count": len(files)}
+
+
+async def delete_profile(profile_id: str, db: Session) -> Optional[dict]:
+    """Move a profile tree to recoverable trash, then remove its database index."""
+
+    profile = db.query(DBVoiceProfile).filter_by(id=profile_id).first()
+    if not profile:
+        return None
+    preview = await preview_profile_delete(profile_id, db)
+    if preview is None:
+        return None
+    samples = db.query(DBProfileSample).filter_by(profile_id=profile_id).all()
+    mappings = db.query(ProfileChannelMapping).filter_by(profile_id=profile_id).all()
+    records = _profile_delete_records(profile, samples, mappings)
+    receipt = PrivateVoiceStore(config.get_privacy_dir()).trash_owned_paths(
+        kind="profile",
+        object_id=profile_id,
+        paths=(_get_profiles_dir() / _safe_identifier(profile_id),),
+        metadata={
+            "description": profile.description,
+            "language": profile.language,
+            "name": profile.name,
+            "sample_count": len(samples),
+            "channel_count": len(mappings),
+        },
+        records=records,
+    )
     db.query(DBProfileSample).filter_by(profile_id=profile_id).delete()
-    
-    # Delete profile from database
+    db.query(ProfileChannelMapping).filter_by(profile_id=profile_id).delete()
     db.delete(profile)
     db.commit()
-    
-    # Delete profile directory
-    profile_dir = _get_profiles_dir() / profile_id
-    if profile_dir.exists():
-        shutil.rmtree(profile_dir)
-    
-    # Clean up combined audio cache files for this profile
     clear_profile_cache(profile_id)
-    
-    return True
+    return receipt
 
 
-async def delete_profile_sample(
+async def preview_profile_sample_delete(
     sample_id: str,
     db: Session,
-) -> bool:
-    """
-    Delete a profile sample.
-    
-    Args:
-        sample_id: Sample ID
-        db: Database session
-        
-    Returns:
-        True if deleted, False if not found
-    """
+) -> Optional[dict]:
+    """Preview the exact sample file moved by deletion."""
+
     sample = db.query(DBProfileSample).filter_by(id=sample_id).first()
     if not sample:
-        return False
-    
-    # Store profile_id before deleting
+        return None
+    records = {f"database/profile-samples/{sample.id}.json": _sample_record(sample)}
+    files = PrivateVoiceStore(config.get_privacy_dir()).preview_owned_delete(
+        (owned_sample_path(sample),), records=records
+    )
+    return {"files": list(files), "count": len(files)}
+
+
+async def delete_profile_sample(sample_id: str, db: Session) -> Optional[dict]:
+    """Move a sample to recoverable trash, then remove its database index."""
+
+    sample = db.query(DBProfileSample).filter_by(id=sample_id).first()
+    if not sample:
+        return None
     profile_id = sample.profile_id
-    
-    # Delete audio file
-    audio_path = Path(sample.audio_path)
-    if audio_path.exists():
-        audio_path.unlink()
-    
-    # Delete from database
+    records = {f"database/profile-samples/{sample.id}.json": _sample_record(sample)}
+    receipt = PrivateVoiceStore(config.get_privacy_dir()).trash_owned_paths(
+        kind="sample",
+        object_id=sample_id,
+        paths=(owned_sample_path(sample),),
+        metadata={"profile_id": profile_id, "reference_text": sample.reference_text},
+        records=records,
+    )
     db.delete(sample)
     db.commit()
-    
-    # Invalidate combined audio cache for this profile
-    # Since the sample set changed, any cached combined audio is now stale
     clear_profile_cache(profile_id)
-    
-    return True
+    return receipt
 
 
 async def update_profile_sample(
@@ -329,15 +434,16 @@ async def create_voice_prompt_for_profile(
     use_cache: bool = True,
 ) -> dict:
     """
-    Create a combined voice prompt from all samples in a profile.
+    Return provider-input metadata for one consentable source sample.
 
     Args:
         profile_id: Profile ID
         db: Database session
-        use_cache: Whether to use cached prompts
+        use_cache: Retained compatibility argument; provider caches are not
+            owned or inspected by Voicebox.
 
     Returns:
-        Voice prompt dictionary
+        A product-side descriptor. It contains no model tensors or pickle.
     """
     # Get all samples for profile
     samples = db.query(DBProfileSample).filter_by(profile_id=profile_id).all()
@@ -345,49 +451,19 @@ async def create_voice_prompt_for_profile(
     if not samples:
         raise ValueError(f"No samples found for profile {profile_id}")
 
-    tts_model = get_tts_model()
-
-    if len(samples) == 1:
-        # Single sample - use directly
-        sample = samples[0]
-        voice_prompt, _ = await tts_model.create_voice_prompt(
-            sample.audio_path,
-            sample.reference_text,
-            use_cache=use_cache,
+    if len(samples) != 1:
+        raise ValueError(
+            "Exactly one source sample is required until the provider protocol "
+            "defines a bounded multi-sample descriptor population"
         )
-        return voice_prompt
-    else:
-        # Multiple samples - combine them
-        audio_paths = [s.audio_path for s in samples]
-        reference_texts = [s.reference_text for s in samples]
-
-        # Combine audio
-        combined_audio, combined_text = await tts_model.combine_voice_prompts(
-            audio_paths,
-            reference_texts,
-        )
-
-        # Save combined audio to cache directory (persistent)
-        # Create a hash of sample IDs to identify this specific combination
-        import hashlib
-        sample_ids_str = "-".join(sorted([s.id for s in samples]))
-        combination_hash = hashlib.md5(sample_ids_str.encode()).hexdigest()[:12]
-        
-        # Store in cache directory
-        cache_dir = _get_cache_dir()
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        combined_path = cache_dir / f"combined_{profile_id}_{combination_hash}.wav"
-        
-        # Save combined audio
-        save_audio(combined_audio, str(combined_path), 24000)
-
-        # Create prompt from combined audio
-        voice_prompt, _ = await tts_model.create_voice_prompt(
-            str(combined_path),
-            combined_text,
-            use_cache=use_cache,
-        )
-        return voice_prompt
+    sample = samples[0]
+    audio_path = owned_sample_path(sample)
+    return {
+        "sample_id": sample.id,
+        "audio_path": str(audio_path),
+        "reference_text": sample.reference_text,
+        "provider_cache_owned": True,
+    }
 
 
 async def upload_avatar(
@@ -416,12 +492,6 @@ async def upload_avatar(
     if not is_valid:
         raise ValueError(error_msg)
 
-    # Delete existing avatar if present
-    if profile.avatar_path:
-        old_avatar = Path(profile.avatar_path)
-        if old_avatar.exists():
-            old_avatar.unlink()
-
     # Determine file extension from uploaded file
     from PIL import Image
     with Image.open(image_path) as img:
@@ -438,11 +508,30 @@ async def upload_avatar(
         ext = ext_map.get(img_format, '.png')
 
     # Save processed image to profile directory
-    profile_dir = _get_profiles_dir() / profile_id
-    profile_dir.mkdir(parents=True, exist_ok=True)
+    profile_dir = _get_profiles_dir() / _safe_identifier(profile_id)
+    profile_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
+    os.chmod(profile_dir, 0o700, follow_symlinks=False)
     output_path = profile_dir / f"avatar{ext}"
-
-    process_avatar(image_path, str(output_path))
+    temporary = profile_dir / f".avatar.{uuid.uuid4().hex}.partial{ext}"
+    try:
+        process_avatar(image_path, str(temporary))
+        os.chmod(temporary, 0o600, follow_symlinks=False)
+        if profile.avatar_path:
+            old_avatar = owned_avatar_path(profile)
+            if old_avatar is None:
+                raise ValueError("avatar path is unavailable")
+            if old_avatar.exists():
+                PrivateVoiceStore(config.get_privacy_dir()).trash_owned_paths(
+                    kind="avatar-replaced",
+                    object_id=profile_id,
+                    paths=(old_avatar,),
+                    metadata={"profile_id": profile_id},
+                )
+        if output_path.exists():
+            raise ValueError("avatar destination already exists")
+        os.replace(temporary, output_path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
     # Update database
     profile.avatar_path = str(output_path)
@@ -454,33 +543,56 @@ async def upload_avatar(
     return VoiceProfileResponse.model_validate(profile)
 
 
-async def delete_avatar(
+async def preview_avatar_delete(
     profile_id: str,
     db: Session,
-) -> bool:
-    """
-    Delete avatar image for a profile.
+) -> Optional[dict]:
+    """Preview the exact avatar file moved by deletion."""
 
-    Args:
-        profile_id: Profile ID
-        db: Database session
-
-    Returns:
-        True if deleted, False if not found or no avatar
-    """
     profile = db.query(DBVoiceProfile).filter_by(id=profile_id).first()
     if not profile or not profile.avatar_path:
-        return False
+        return None
+    avatar_path = owned_avatar_path(profile)
+    if avatar_path is None:
+        return None
+    records = {
+        f"database/profile-avatar/{profile.id}.json": {
+            "schema": "kilix.voicebox.profile-avatar-recovery/candidate-v1",
+            "profile_id": profile.id,
+            "avatar_name": avatar_path.name,
+        }
+    }
+    files = PrivateVoiceStore(config.get_privacy_dir()).preview_owned_delete(
+        (avatar_path,), records=records
+    )
+    return {"files": list(files), "count": len(files)}
 
-    # Delete avatar file
-    avatar_path = Path(profile.avatar_path)
-    if avatar_path.exists():
-        avatar_path.unlink()
 
-    # Update database
+async def delete_avatar(profile_id: str, db: Session) -> Optional[dict]:
+    """Move an avatar to recoverable trash, then clear its database index."""
+
+    profile = db.query(DBVoiceProfile).filter_by(id=profile_id).first()
+    if not profile or not profile.avatar_path:
+        return None
+
+    avatar_path = owned_avatar_path(profile)
+    if avatar_path is None:
+        return None
+    records = {
+        f"database/profile-avatar/{profile.id}.json": {
+            "schema": "kilix.voicebox.profile-avatar-recovery/candidate-v1",
+            "profile_id": profile.id,
+            "avatar_name": avatar_path.name,
+        }
+    }
+    receipt = PrivateVoiceStore(config.get_privacy_dir()).trash_owned_paths(
+        kind="avatar",
+        object_id=profile_id,
+        paths=(avatar_path,),
+        metadata={"profile_id": profile_id},
+        records=records,
+    )
     profile.avatar_path = None
     profile.updated_at = datetime.utcnow()
-
     db.commit()
-
-    return True
+    return receipt

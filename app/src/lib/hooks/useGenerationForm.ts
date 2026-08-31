@@ -1,12 +1,10 @@
 import { zodResolver } from '@hookform/resolvers/zod';
-import { useState } from 'react';
 import { useForm } from 'react-hook-form';
 import * as z from 'zod';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
 import { LANGUAGE_CODES, type LanguageCode } from '@/lib/constants/languages';
 import { useGeneration } from '@/lib/hooks/useGeneration';
-import { useModelDownloadToast } from '@/lib/hooks/useModelDownloadToast';
 import { useGenerationStore } from '@/stores/generationStore';
 import { usePlayerStore } from '@/stores/playerStore';
 
@@ -14,8 +12,10 @@ const generationSchema = z.object({
   text: z.string().min(1, 'Text is required').max(5000),
   language: z.enum(LANGUAGE_CODES as [LanguageCode, ...LanguageCode[]]),
   seed: z.number().int().optional(),
-  modelSize: z.enum(['1.7B', '0.6B']).optional(),
   instruct: z.string().max(500).optional(),
+  consentAsserted: z.boolean().refine((asserted) => asserted, {
+    message: 'Confirm that you have permission to use this voice sample.',
+  }),
 });
 
 export type GenerationFormValues = z.infer<typeof generationSchema>;
@@ -30,23 +30,14 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
   const generation = useGeneration();
   const setAudioWithAutoPlay = usePlayerStore((state) => state.setAudioWithAutoPlay);
   const setIsGenerating = useGenerationStore((state) => state.setIsGenerating);
-  const [downloadingModelName, setDownloadingModelName] = useState<string | null>(null);
-  const [downloadingDisplayName, setDownloadingDisplayName] = useState<string | null>(null);
-
-  useModelDownloadToast({
-    modelName: downloadingModelName || '',
-    displayName: downloadingDisplayName || '',
-    enabled: !!downloadingModelName,
-  });
-
   const form = useForm<GenerationFormValues>({
     resolver: zodResolver(generationSchema),
     defaultValues: {
       text: '',
       language: 'en',
       seed: undefined,
-      modelSize: '1.7B',
       instruct: '',
+      consentAsserted: false,
       ...options.defaultValues,
     },
   });
@@ -67,28 +58,13 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
     try {
       setIsGenerating(true);
 
-      const modelName = `qwen-tts-${data.modelSize}`;
-      const displayName = data.modelSize === '1.7B' ? 'Qwen TTS 1.7B' : 'Qwen TTS 0.6B';
-
-      try {
-        const modelStatus = await apiClient.getModelStatus();
-        const model = modelStatus.models.find((m) => m.model_name === modelName);
-
-        if (model && !model.downloaded) {
-          setDownloadingModelName(modelName);
-          setDownloadingDisplayName(displayName);
-        }
-      } catch (error) {
-        console.error('Failed to check model status:', error);
-      }
-
       const result = await generation.mutateAsync({
         profile_id: selectedProfileId,
         text: data.text,
         language: data.language,
         seed: data.seed,
-        model_size: data.modelSize,
         instruct: data.instruct || undefined,
+        consent_asserted: data.consentAsserted,
       });
 
       toast({
@@ -109,8 +85,6 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
       });
     } finally {
       setIsGenerating(false);
-      setDownloadingModelName(null);
-      setDownloadingDisplayName(null);
     }
   }
 

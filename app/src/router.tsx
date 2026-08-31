@@ -8,16 +8,12 @@ import { Sidebar } from '@/components/Sidebar';
 import { StoriesTab } from '@/components/StoriesTab/StoriesTab';
 import { Toaster } from '@/components/ui/toaster';
 import { VoicesTab } from '@/components/VoicesTab/VoicesTab';
-import { useModelDownloadToast } from '@/lib/hooks/useModelDownloadToast';
-import { MODEL_DISPLAY_NAMES, useRestoreActiveTasks } from '@/lib/hooks/useRestoreActiveTasks';
+
 // Simple platform check that works in both web and Tauri
 const isMacOS = () => navigator.platform.toLowerCase().includes('mac');
 
 // Root layout component
 function RootLayout() {
-  // Monitor active downloads/generations and show toasts for them
-  const activeDownloads = useRestoreActiveTasks();
-
   return (
     <AppFrame>
       <div className="flex flex-1 min-h-0 overflow-hidden">
@@ -30,41 +26,9 @@ function RootLayout() {
         </main>
       </div>
 
-      {/* Show download toasts for any active downloads (from anywhere) */}
-      {activeDownloads.map((download) => {
-        const displayName = MODEL_DISPLAY_NAMES[download.model_name] || download.model_name;
-        return (
-          <DownloadToastRestorer
-            key={download.model_name}
-            modelName={download.model_name}
-            displayName={displayName}
-          />
-        );
-      })}
-
       <Toaster />
     </AppFrame>
   );
-}
-
-/**
- * Component that restores a download toast for a specific model.
- */
-function DownloadToastRestorer({
-  modelName,
-  displayName,
-}: {
-  modelName: string;
-  displayName: string;
-}) {
-  // Use the download toast hook to restore the toast
-  useModelDownloadToast({
-    modelName,
-    displayName,
-    enabled: true,
-  });
-
-  return null;
 }
 
 // Root route with layout

@@ -5,8 +5,8 @@ export const tauriMetadata: PlatformMetadata = {
   async getVersion(): Promise<string> {
     try {
       return await getVersion();
-    } catch (error) {
-      console.error('Failed to get version:', error);
+    } catch {
+      console.error('VOICEBOX_VERSION_UNAVAILABLE');
       return '0.1.0';
     }
   },

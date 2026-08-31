@@ -3,52 +3,17 @@
 /* tslint:disable */
 /* eslint-disable */
 export const $HealthResponse = {
-  description: `Response model for health check.`,
-  properties: {
-    status: {
-      type: 'string',
-      isRequired: true,
-    },
-    model_loaded: {
-      type: 'boolean',
-      isRequired: true,
-    },
-    model_downloaded: {
-      type: 'any-of',
-      contains: [
-        {
-          type: 'boolean',
+    description: `Response model for health check.`,
+    properties: {
+        status: {
+            type: 'string',
+            isRequired: true,
         },
-        {
-          type: 'null',
+        qwen_provider: {
+            type: 'string',
         },
-      ],
+        transcribe_provider: {
+            type: 'string',
+        },
     },
-    model_size: {
-      type: 'any-of',
-      contains: [
-        {
-          type: 'string',
-        },
-        {
-          type: 'null',
-        },
-      ],
-    },
-    gpu_available: {
-      type: 'boolean',
-      isRequired: true,
-    },
-    vram_used_mb: {
-      type: 'any-of',
-      contains: [
-        {
-          type: 'number',
-        },
-        {
-          type: 'null',
-        },
-      ],
-    },
-  },
 } as const;

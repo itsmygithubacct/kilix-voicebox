@@ -14,6 +14,7 @@ import { Slider } from '@/components/ui/slider';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
+import type { DeletePreview } from '@/lib/api/types';
 import { useDeleteSample, useProfileSamples, useUpdateSample } from '@/lib/hooks/useProfiles';
 import { formatAudioDuration } from '@/lib/utils/audio';
 import { cn } from '@/lib/utils/cn';
@@ -150,10 +151,21 @@ export function SampleList({ profileId }: SampleListProps) {
   const [editedText, setEditedText] = useState<string>('');
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [sampleToDelete, setSampleToDelete] = useState<string | null>(null);
+  const [deletePreview, setDeletePreview] = useState<DeletePreview | null>(null);
 
-  const handleDeleteClick = (sampleId: string) => {
-    setSampleToDelete(sampleId);
-    setDeleteDialogOpen(true);
+  const handleDeleteClick = async (sampleId: string) => {
+    try {
+      const preview = await apiClient.getProfileSampleDeletePreview(sampleId);
+      setSampleToDelete(sampleId);
+      setDeletePreview(preview);
+      setDeleteDialogOpen(true);
+    } catch (error) {
+      toast({
+        title: 'Could not preview deletion',
+        description: error instanceof Error ? error.message : 'DELETE_PREVIEW_FAILED',
+        variant: 'destructive',
+      });
+    }
   };
 
   const handleDeleteConfirm = () => {
@@ -161,6 +173,7 @@ export function SampleList({ profileId }: SampleListProps) {
       deleteSample.mutate(sampleToDelete);
       setDeleteDialogOpen(false);
       setSampleToDelete(null);
+      setDeletePreview(null);
     }
   };
 
@@ -324,13 +337,30 @@ export function SampleList({ profileId }: SampleListProps) {
 
       <SampleUpload profileId={profileId} open={uploadOpen} onOpenChange={setUploadOpen} />
 
-      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+      <Dialog
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          setDeleteDialogOpen(open);
+          if (!open) {
+            setSampleToDelete(null);
+            setDeletePreview(null);
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete Sample</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete this audio sample? This action cannot be undone.
+              Move {deletePreview?.count ?? 0}/{deletePreview?.total ?? 0} owned entries to private
+              recoverable trash?
             </DialogDescription>
+            {deletePreview && (
+              <ul className="max-h-32 overflow-y-auto rounded border p-2 text-xs text-muted-foreground">
+                {deletePreview.files.map((file) => (
+                  <li key={file}>{file}</li>
+                ))}
+              </ul>
+            )}
           </DialogHeader>
           <DialogFooter>
             <Button
@@ -338,6 +368,7 @@ export function SampleList({ profileId }: SampleListProps) {
               onClick={() => {
                 setDeleteDialogOpen(false);
                 setSampleToDelete(null);
+                setDeletePreview(null);
               }}
             >
               Cancel

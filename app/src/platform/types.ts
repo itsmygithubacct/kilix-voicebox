@@ -12,27 +12,6 @@ export interface PlatformFilesystem {
   saveFile(filename: string, blob: Blob, filters?: FileFilter[]): Promise<void>;
 }
 
-export interface UpdateStatus {
-  checking: boolean;
-  available: boolean;
-  version?: string;
-  downloading: boolean;
-  installing: boolean;
-  readyToInstall: boolean;
-  error?: string;
-  downloadProgress?: number; // 0-100 percentage
-  downloadedBytes?: number;
-  totalBytes?: number;
-}
-
-export interface PlatformUpdater {
-  checkForUpdates(): Promise<void>;
-  downloadAndInstall(): Promise<void>;
-  restartAndInstall(): Promise<void>;
-  getStatus(): UpdateStatus;
-  subscribe(callback: (status: UpdateStatus) => void): () => void;
-}
-
 export interface AudioDevice {
   id: string;
   name: string;
@@ -48,11 +27,14 @@ export interface PlatformAudio {
   stopPlayback(): void;
 }
 
+export interface ServerSession {
+  url: string;
+  token: string;
+}
+
 export interface PlatformLifecycle {
-  startServer(remote?: boolean): Promise<string>;
+  startServer(): Promise<ServerSession>;
   stopServer(): Promise<void>;
-  setKeepServerRunning(keep: boolean): Promise<void>;
-  setupWindowCloseHandler(): Promise<void>;
   onServerReady?: () => void;
 }
 
@@ -63,7 +45,6 @@ export interface PlatformMetadata {
 
 export interface Platform {
   filesystem: PlatformFilesystem;
-  updater: PlatformUpdater;
   audio: PlatformAudio;
   lifecycle: PlatformLifecycle;
   metadata: PlatformMetadata;

@@ -17,8 +17,7 @@ const Checkbox = React.forwardRef<HTMLButtonElement, CheckboxProps>(
         type="button"
         ref={ref}
         id={id}
-        role="checkbox"
-        aria-checked={checked}
+        aria-pressed={checked}
         disabled={disabled}
         onClick={() => {
           if (!disabled && onCheckedChange) {

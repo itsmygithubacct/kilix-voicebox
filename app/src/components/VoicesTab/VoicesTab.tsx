@@ -1,5 +1,5 @@
 import { useQuery, useQueryClient } from '@tanstack/react-query';
-import { Edit, MoreHorizontal, Plus, Trash2, Mic } from 'lucide-react';
+import { Edit, Mic, MoreHorizontal, Plus, Trash2 } from 'lucide-react';
 import { useMemo, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import {
@@ -17,6 +17,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
+import { useToast } from '@/components/ui/use-toast';
 import { ProfileForm } from '@/components/VoiceProfiles/ProfileForm';
 import { apiClient } from '@/lib/api/client';
 import type { VoiceProfileResponse } from '@/lib/api/types';
@@ -37,6 +38,7 @@ export function VoicesTab() {
   const scrollRef = useRef<HTMLDivElement>(null);
   const audioUrl = usePlayerStore((state) => state.audioUrl);
   const isPlayerVisible = !!audioUrl;
+  const { toast } = useToast();
 
   // Get generation counts per profile
   const generationCounts = useMemo(() => {
@@ -79,9 +81,23 @@ export function VoicesTab() {
     setDialogOpen(true);
   };
 
-  const handleDelete = (profileId: string) => {
-    if (confirm('Are you sure you want to delete this profile?')) {
-      deleteProfile.mutate(profileId);
+  const handleDelete = async (profileId: string) => {
+    try {
+      const preview = await apiClient.getProfileDeletePreview(profileId);
+      const population = preview.files.join('\n');
+      if (
+        confirm(
+          `Move ${preview.count}/${preview.total} owned entries to private recoverable trash?\n\n${population}`,
+        )
+      ) {
+        deleteProfile.mutate(profileId);
+      }
+    } catch (error) {
+      toast({
+        title: 'Could not preview deletion',
+        description: error instanceof Error ? error.message : 'DELETE_PREVIEW_FAILED',
+        variant: 'destructive',
+      });
     }
   };
 
@@ -89,8 +105,8 @@ export function VoicesTab() {
     try {
       await apiClient.setProfileChannels(profileId, channelIds);
       queryClient.invalidateQueries({ queryKey: ['profile-channels'] });
-    } catch (error) {
-      console.error('Failed to update channels:', error);
+    } catch {
+      console.error('VOICEBOX_CHANNEL_UPDATE_FAILED');
     }
   };
 

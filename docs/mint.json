@@ -70,8 +70,7 @@
         "developer/setup",
         "developer/architecture",
         "developer/contributing",
-        "developer/building",
-        "developer/autoupdater"
+        "developer/building"
       ]
     },
     {

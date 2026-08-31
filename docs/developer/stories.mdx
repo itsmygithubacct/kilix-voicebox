@@ -269,13 +269,19 @@ async def export_story_audio(story_id: str, db: Session) -> bytes:
 
 ## API Endpoints
 
+Story deletion first previews every story and item record, then writes those
+records plus a canonical receipt to private recoverable trash before removing
+the live database rows. Generation audio remains independently owned and is not
+deleted with a story.
+
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/stories` | List all stories |
 | POST | `/stories` | Create a story |
 | GET | `/stories/{id}` | Get story with items |
 | PUT | `/stories/{id}` | Update story metadata |
-| DELETE | `/stories/{id}` | Delete story |
+| GET | `/stories/{id}/delete-preview` | Preview exact recovery population |
+| DELETE | `/stories/{id}` | Archive story in recoverable trash |
 | POST | `/stories/{id}/items` | Add item to story |
 | DELETE | `/stories/{id}/items/{item_id}` | Remove item |
 | PUT | `/stories/{id}/items/{item_id}/move` | Move item |
@@ -302,7 +308,7 @@ async def export_story_audio(story_id: str, db: Session) -> bytes:
   "profile_id": "profile_uuid",
   "profile_name": "Narrator",
   "text": "Hello world",
-  "audio_path": "/path/to/audio.wav",
+  "audio_path": "/audio/generation-id",
   "duration": 2.5,
   "created_at": "2024-01-15T10:30:00Z"
 }

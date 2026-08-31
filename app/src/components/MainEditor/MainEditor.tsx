@@ -137,8 +137,9 @@ export function MainEditor() {
           <DialogHeader>
             <DialogTitle>Import Profile</DialogTitle>
             <DialogDescription>
-              Import the profile from "{selectedFile?.name}". This will create a new profile with
-              all samples.
+              Import the profile from "{selectedFile?.name}". Only import source samples you have
+              authority to use and clone. Voicebox imports only samples explicitly included in the
+              archive; generation still requires a separate consent assertion.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>

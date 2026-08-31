@@ -79,6 +79,12 @@ GET /history/{id}
 
 ## Delete Generation
 
+Preview the exact population first:
+
+```http
+GET /history/{id}/delete-preview
+```
+
 ```http
 DELETE /history/{id}
 ```
@@ -86,7 +92,15 @@ DELETE /history/{id}
 **Response:**
 ```json
 {
-  "success": true
+  "batch_id": "generation-gen123-opaque",
+  "files": [
+    "generations/gen123.wav",
+    "generations/gen123.provenance.json",
+    "consent/CONSENT_SHA256.gen123.derived-output.json",
+    "database/generations/gen123.json"
+  ],
+  "count": 4,
+  "total": 4
 }
 ```
 

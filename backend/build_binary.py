@@ -1,108 +1,92 @@
-"""
-PyInstaller build script for creating standalone Python server binary.
-"""
+"""Build the product-only Voicebox sidecar without model runtimes."""
+
+from __future__ import annotations
+
+import hashlib
+import json
+from pathlib import Path
+import subprocess
 
 import PyInstaller.__main__
-import os
-import platform
-from pathlib import Path
 
 
-def is_apple_silicon():
-    """Check if running on Apple Silicon."""
-    return platform.system() == "Darwin" and platform.machine() == "arm64"
+ROOT = Path(__file__).resolve().parent.parent
 
 
-def build_server():
-    """Build Python server as standalone binary."""
-    backend_dir = Path(__file__).parent
+def _sha256(path: Path) -> str:
+    digest = hashlib.sha256()
+    with path.open("rb") as source:
+        for chunk in iter(lambda: source.read(1024 * 1024), b""):
+            digest.update(chunk)
+    return digest.hexdigest()
 
-    # PyInstaller arguments
-    args = [
-        'server.py',  # Use server.py as entry point instead of main.py
-        '--onefile',
-        '--name', 'voicebox-server',
+
+def _git_identity(name: str) -> str:
+    return subprocess.check_output(
+        ("git", "rev-parse", name), cwd=ROOT, text=True, stderr=subprocess.DEVNULL
+    ).strip()
+
+
+def build_server() -> None:
+    hidden = (
+        "backend",
+        "backend.main",
+        "backend.config",
+        "backend.database",
+        "backend.models",
+        "backend.profiles",
+        "backend.history",
+        "backend.tts",
+        "backend.transcribe",
+        "backend.kilix_provider",
+        "backend.orchestrator",
+        "backend.private_store",
+        "backend.utils.audio",
+        "backend.utils.cache",
+        "backend.utils.validation",
+        "fastapi",
+        "uvicorn",
+        "sqlalchemy",
+        "librosa",
+        "soundfile",
+    )
+    arguments = [
+        str(ROOT / "backend" / "server.py"),
+        "--onefile",
+        "--name",
+        "voicebox-server",
+        "--paths",
+        str(ROOT),
+        "--distpath",
+        str(ROOT / "backend" / "dist"),
+        "--workpath",
+        str(ROOT / "backend" / "build"),
+        "--specpath",
+        str(ROOT / "backend" / "build"),
+        "--noconfirm",
+        "--clean",
     ]
-
-    # Add local qwen_tts path if specified (for editable installs)
-    qwen_tts_path = os.getenv('QWEN_TTS_PATH')
-    if qwen_tts_path and Path(qwen_tts_path).exists():
-        args.extend(['--paths', str(qwen_tts_path)])
-        print(f"Using local qwen_tts source from: {qwen_tts_path}")
-
-    # Add common hidden imports
-    args.extend([
-        '--hidden-import', 'backend',
-        '--hidden-import', 'backend.main',
-        '--hidden-import', 'backend.config',
-        '--hidden-import', 'backend.database',
-        '--hidden-import', 'backend.models',
-        '--hidden-import', 'backend.profiles',
-        '--hidden-import', 'backend.history',
-        '--hidden-import', 'backend.tts',
-        '--hidden-import', 'backend.transcribe',
-        '--hidden-import', 'backend.platform_detect',
-        '--hidden-import', 'backend.backends',
-        '--hidden-import', 'backend.backends.pytorch_backend',
-        '--hidden-import', 'backend.utils.audio',
-        '--hidden-import', 'backend.utils.cache',
-        '--hidden-import', 'backend.utils.progress',
-        '--hidden-import', 'backend.utils.hf_progress',
-        '--hidden-import', 'backend.utils.validation',
-        '--hidden-import', 'torch',
-        '--hidden-import', 'transformers',
-        '--hidden-import', 'fastapi',
-        '--hidden-import', 'uvicorn',
-        '--hidden-import', 'sqlalchemy',
-        '--hidden-import', 'librosa',
-        '--hidden-import', 'soundfile',
-        '--hidden-import', 'qwen_tts',
-        '--hidden-import', 'qwen_tts.inference',
-        '--hidden-import', 'qwen_tts.inference.qwen3_tts_model',
-        '--hidden-import', 'qwen_tts.inference.qwen3_tts_tokenizer',
-        '--hidden-import', 'qwen_tts.core',
-        '--hidden-import', 'qwen_tts.cli',
-        '--copy-metadata', 'qwen-tts',
-        '--collect-submodules', 'qwen_tts',
-        '--collect-data', 'qwen_tts',
-        # Fix for pkg_resources and jaraco namespace packages
-        '--hidden-import', 'pkg_resources.extern',
-        '--collect-submodules', 'jaraco',
-    ])
-
-    # Add MLX-specific imports if building on Apple Silicon
-    if is_apple_silicon():
-        print("Building for Apple Silicon - including MLX dependencies")
-        args.extend([
-            '--hidden-import', 'backend.backends.mlx_backend',
-            '--hidden-import', 'mlx',
-            '--hidden-import', 'mlx.core',
-            '--hidden-import', 'mlx.nn',
-            '--hidden-import', 'mlx_audio',
-            '--hidden-import', 'mlx_audio.tts',
-            '--hidden-import', 'mlx_audio.stt',
-            '--collect-submodules', 'mlx',
-            '--collect-submodules', 'mlx_audio',
-            # Collect MLX data files including Metal shader libraries (.metallib)
-            '--collect-data', 'mlx',
-            '--collect-data', 'mlx_audio',
-        ])
-    else:
-        print("Building for non-Apple Silicon platform - PyTorch only")
-
-    args.extend([
-        '--noconfirm',
-        '--clean',
-    ])
-
-    # Change to backend directory
-    os.chdir(backend_dir)
-    
-    # Run PyInstaller
-    PyInstaller.__main__.run(args)
-    
-    print(f"Binary built in {backend_dir / 'dist' / 'voicebox-server'}")
+    for module in hidden:
+        arguments.extend(("--hidden-import", module))
+    PyInstaller.__main__.run(arguments)
+    suffix = ".exe" if (ROOT / "backend" / "dist" / "voicebox-server.exe").is_file() else ""
+    binary = ROOT / "backend" / "dist" / f"voicebox-server{suffix}"
+    manifest = {
+        "schema": "kilix.voicebox.sidecar-provenance/candidate-v1",
+        "source_commit": _git_identity("HEAD"),
+        "source_tree": _git_identity("HEAD^{tree}"),
+        "uv_lock_sha256": _sha256(ROOT / "uv.lock"),
+        "sidecar_sha256": _sha256(binary),
+        "sidecar_bytes": binary.stat().st_size,
+        "contains_model_runtime": False,
+        "provider_endpoints": ["kilix-qwen-tts.sock", "kilix-transcribe.sock"],
+    }
+    destination = ROOT / "backend" / "dist" / "voicebox-server.provenance.json"
+    destination.write_text(
+        json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     build_server()

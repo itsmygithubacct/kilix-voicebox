@@ -1,42 +1,81 @@
-"""
-TTS inference module - delegates to backend abstraction layer.
-"""
+"""Qwen provider access; Voicebox contains no synthesis runtime."""
 
-from typing import Optional
-import numpy as np
-import io
-import soundfile as sf
+from __future__ import annotations
 
-from .backends import get_tts_backend, TTSBackend
+import asyncio
+import uuid
+from pathlib import Path
+from typing import Any
 
-
-def get_tts_model() -> TTSBackend:
-    """
-    Get TTS backend instance (MLX or PyTorch based on platform).
-    
-    Returns:
-        TTS backend instance
-    """
-    return get_tts_backend()
+from .kilix_provider import (
+    QWEN_ENDPOINT,
+    ProviderClient,
+    ProviderError,
+    runtime_directory_from_environment,
+)
 
 
-def unload_tts_model():
-    """Unload TTS model to free memory."""
-    backend = get_tts_backend()
-    backend.unload_model()
+_client: ProviderClient | None = None
 
 
-def audio_to_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
-    """Convert audio array to WAV bytes."""
-    buffer = io.BytesIO()
-    sf.write(buffer, audio, sample_rate, format="WAV")
-    buffer.seek(0)
-    return buffer.read()
+def get_tts_client(runtime_directory: Path | None = None) -> ProviderClient:
+    global _client
+    if runtime_directory is not None:
+        return ProviderClient(QWEN_ENDPOINT, runtime_directory)
+    if _client is None:
+        _client = ProviderClient(QWEN_ENDPOINT, runtime_directory_from_environment())
+    return _client
 
 
-def audio_to_wav_bytes(audio: np.ndarray, sample_rate: int) -> bytes:
-    """Convert audio array to WAV bytes."""
-    buffer = io.BytesIO()
-    sf.write(buffer, audio, sample_rate, format="WAV")
-    buffer.seek(0)
-    return buffer.read()
+async def status() -> dict[str, Any]:
+    client = get_tts_client()
+    request = {
+        "schema": client.endpoint.schema,
+        "type": "request",
+        "request_id": uuid.uuid4().hex,
+        "op": "status",
+        "deadline_ms": 5_000,
+        "args": {},
+    }
+    with await asyncio.to_thread(client.request, request) as reply:
+        result = reply.payload.get("result")
+        if type(result) is not dict:
+            raise ProviderError("INVALID_RESPONSE")
+        return result
+
+
+async def models() -> list[dict[str, Any]]:
+    client = get_tts_client()
+    request = {
+        "schema": client.endpoint.schema,
+        "type": "request",
+        "request_id": uuid.uuid4().hex,
+        "op": "models",
+        "deadline_ms": 5_000,
+        "args": {},
+    }
+    with await asyncio.to_thread(client.request, request) as reply:
+        result = reply.payload.get("result")
+        population = result.get("models") if type(result) is dict else None
+        if type(population) is not list or any(type(item) is not dict for item in population):
+            raise ProviderError("INVALID_RESPONSE")
+        return population
+
+
+async def unload_tts_model() -> None:
+    client = get_tts_client()
+    request = {
+        "schema": client.endpoint.schema,
+        "type": "request",
+        "request_id": uuid.uuid4().hex,
+        "op": "unload",
+        "deadline_ms": 30_000,
+        "args": {},
+    }
+    with await asyncio.to_thread(client.request, request):
+        return None
+
+
+def reset_client() -> None:
+    global _client
+    _client = None

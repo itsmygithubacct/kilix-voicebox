@@ -1,29 +1,29 @@
-import { useServerStore } from '@/stores/serverStore';
 import type { LanguageCode } from '@/lib/constants/languages';
+import { useServerStore } from '@/stores/serverStore';
 import type {
-  VoiceProfileCreate,
-  VoiceProfileResponse,
-  ProfileSampleResponse,
+  DeletePreview,
+  DeleteReceipt,
   GenerationRequest,
   GenerationResponse,
-  HistoryQuery,
-  HistoryListResponse,
-  HistoryResponse,
-  TranscriptionResponse,
   HealthResponse,
+  HistoryListResponse,
+  HistoryQuery,
+  HistoryResponse,
   ModelStatusListResponse,
-  ModelDownloadRequest,
-  ActiveTasksResponse,
+  ProfileSampleResponse,
   StoryCreate,
-  StoryResponse,
   StoryDetailResponse,
+  StoryItemBatchUpdate,
   StoryItemCreate,
   StoryItemDetail,
-  StoryItemBatchUpdate,
-  StoryItemReorder,
   StoryItemMove,
-  StoryItemTrim,
+  StoryItemReorder,
   StoryItemSplit,
+  StoryItemTrim,
+  StoryResponse,
+  TranscriptionResponse,
+  VoiceProfileCreate,
+  VoiceProfileResponse,
 } from './types';
 
 class ApiClient {
@@ -32,9 +32,37 @@ class ApiClient {
     return serverUrl;
   }
 
+  private getSessionToken(): string {
+    return useServerStore.getState().sessionToken;
+  }
+
+  private authenticatedFetch(url: string, options?: RequestInit): Promise<Response> {
+    const headers = new Headers(options?.headers);
+    headers.set('X-Kilix-Voicebox-Session', this.getSessionToken());
+    return fetch(url, { ...options, headers });
+  }
+
+  private mediaUrl(endpoint: string): string {
+    const token = encodeURIComponent(this.getSessionToken());
+    return `${this.getBaseUrl()}${endpoint}?session=${token}`;
+  }
+
+  private async throwResponseError(response: Response): Promise<never> {
+    const error = await response.json().catch(() => null);
+    const detail =
+      typeof error === 'object' && error !== null && 'detail' in error ? error.detail : null;
+    const candidate =
+      typeof detail === 'object' && detail !== null && 'code' in detail ? detail.code : detail;
+    const code =
+      typeof candidate === 'string' && /^[A-Z][A-Z0-9_]{0,63}$/.test(candidate)
+        ? candidate
+        : `HTTP_${response.status}`;
+    throw new Error(code);
+  }
+
   private async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
     const url = `${this.getBaseUrl()}${endpoint}`;
-    const response = await fetch(url, {
+    const response = await this.authenticatedFetch(url, {
       ...options,
       headers: {
         'Content-Type': 'application/json',
@@ -43,10 +71,7 @@ class ApiClient {
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
+      await this.throwResponseError(response);
     }
 
     return response.json();
@@ -80,8 +105,12 @@ class ApiClient {
     });
   }
 
-  async deleteProfile(profileId: string): Promise<void> {
-    await this.request<void>(`/profiles/${profileId}`, {
+  async getProfileDeletePreview(profileId: string): Promise<DeletePreview> {
+    return this.request<DeletePreview>(`/profiles/${encodeURIComponent(profileId)}/delete-preview`);
+  }
+
+  async deleteProfile(profileId: string): Promise<DeleteReceipt> {
+    return this.request<DeleteReceipt>(`/profiles/${encodeURIComponent(profileId)}`, {
       method: 'DELETE',
     });
   }
@@ -96,16 +125,13 @@ class ApiClient {
     formData.append('file', file);
     formData.append('reference_text', referenceText);
 
-    const response = await fetch(url, {
+    const response = await this.authenticatedFetch(url, {
       method: 'POST',
       body: formData,
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
+      await this.throwResponseError(response);
     }
 
     return response.json();
@@ -115,8 +141,14 @@ class ApiClient {
     return this.request<ProfileSampleResponse[]>(`/profiles/${profileId}/samples`);
   }
 
-  async deleteProfileSample(sampleId: string): Promise<void> {
-    await this.request<void>(`/profiles/samples/${sampleId}`, {
+  async getProfileSampleDeletePreview(sampleId: string): Promise<DeletePreview> {
+    return this.request<DeletePreview>(
+      `/profiles/samples/${encodeURIComponent(sampleId)}/delete-preview`,
+    );
+  }
+
+  async deleteProfileSample(sampleId: string): Promise<DeleteReceipt> {
+    return this.request<DeleteReceipt>(`/profiles/samples/${encodeURIComponent(sampleId)}`, {
       method: 'DELETE',
     });
   }
@@ -131,15 +163,13 @@ class ApiClient {
     });
   }
 
-  async exportProfile(profileId: string): Promise<Blob> {
-    const url = `${this.getBaseUrl()}/profiles/${profileId}/export`;
-    const response = await fetch(url);
+  async exportProfile(profileId: string, includeSamples = false): Promise<Blob> {
+    const query = includeSamples ? '?include_samples=true' : '';
+    const url = `${this.getBaseUrl()}/profiles/${profileId}/export${query}`;
+    const response = await this.authenticatedFetch(url);
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
+      await this.throwResponseError(response);
     }
 
     return response.blob();
@@ -150,16 +180,13 @@ class ApiClient {
     const formData = new FormData();
     formData.append('file', file);
 
-    const response = await fetch(url, {
+    const response = await this.authenticatedFetch(url, {
       method: 'POST',
       body: formData,
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
+      await this.throwResponseError(response);
     }
 
     return response.json();
@@ -170,23 +197,26 @@ class ApiClient {
     const formData = new FormData();
     formData.append('file', file);
 
-    const response = await fetch(url, {
+    const response = await this.authenticatedFetch(url, {
       method: 'POST',
       body: formData,
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
+      await this.throwResponseError(response);
     }
 
     return response.json();
   }
 
-  async deleteAvatar(profileId: string): Promise<void> {
-    await this.request<void>(`/profiles/${profileId}/avatar`, {
+  async getAvatarDeletePreview(profileId: string): Promise<DeletePreview> {
+    return this.request<DeletePreview>(
+      `/profiles/${encodeURIComponent(profileId)}/avatar/delete-preview`,
+    );
+  }
+
+  async deleteAvatar(profileId: string): Promise<DeleteReceipt> {
+    return this.request<DeleteReceipt>(`/profiles/${encodeURIComponent(profileId)}/avatar`, {
       method: 'DELETE',
     });
   }
@@ -217,21 +247,24 @@ class ApiClient {
     return this.request<HistoryResponse>(`/history/${generationId}`);
   }
 
-  async deleteGeneration(generationId: string): Promise<void> {
-    await this.request<void>(`/history/${generationId}`, {
+  async getGenerationDeletePreview(generationId: string): Promise<DeletePreview> {
+    return this.request<DeletePreview>(
+      `/history/${encodeURIComponent(generationId)}/delete-preview`,
+    );
+  }
+
+  async deleteGeneration(generationId: string): Promise<DeleteReceipt> {
+    return this.request<DeleteReceipt>(`/history/${encodeURIComponent(generationId)}`, {
       method: 'DELETE',
     });
   }
 
   async exportGeneration(generationId: string): Promise<Blob> {
     const url = `${this.getBaseUrl()}/history/${generationId}/export`;
-    const response = await fetch(url);
+    const response = await this.authenticatedFetch(url);
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
+      await this.throwResponseError(response);
     }
 
     return response.blob();
@@ -239,45 +272,26 @@ class ApiClient {
 
   async exportGenerationAudio(generationId: string): Promise<Blob> {
     const url = `${this.getBaseUrl()}/history/${generationId}/export-audio`;
-    const response = await fetch(url);
+    const response = await this.authenticatedFetch(url);
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
+      await this.throwResponseError(response);
     }
 
     return response.blob();
   }
 
-  async importGeneration(file: File): Promise<{ id: string; profile_id: string; profile_name: string; text: string; message: string }> {
-    const url = `${this.getBaseUrl()}/history/import`;
-    const formData = new FormData();
-    formData.append('file', file);
-
-    const response = await fetch(url, {
-      method: 'POST',
-      body: formData,
-    });
-
-    if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
-    }
-
-    return response.json();
-  }
-
   // Audio
   getAudioUrl(audioId: string): string {
-    return `${this.getBaseUrl()}/audio/${audioId}`;
+    return this.mediaUrl(`/audio/${encodeURIComponent(audioId)}`);
   }
 
   getSampleUrl(sampleId: string): string {
-    return `${this.getBaseUrl()}/samples/${sampleId}`;
+    return this.mediaUrl(`/samples/${encodeURIComponent(sampleId)}`);
+  }
+
+  getAvatarUrl(profileId: string): string {
+    return this.mediaUrl(`/profiles/${encodeURIComponent(profileId)}/avatar`);
   }
 
   // Transcription
@@ -289,16 +303,13 @@ class ApiClient {
     }
 
     const url = `${this.getBaseUrl()}/transcribe`;
-    const response = await fetch(url, {
+    const response = await this.authenticatedFetch(url, {
       method: 'POST',
       body: formData,
     });
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
+      await this.throwResponseError(response);
     }
 
     return response.json();
@@ -307,27 +318,6 @@ class ApiClient {
   // Model Management
   async getModelStatus(): Promise<ModelStatusListResponse> {
     return this.request<ModelStatusListResponse>('/models/status');
-  }
-
-  async triggerModelDownload(modelName: string): Promise<{ message: string }> {
-    console.log('[API] triggerModelDownload called for:', modelName, 'at', new Date().toISOString());
-    const result = await this.request<{ message: string }>('/models/download', {
-      method: 'POST',
-      body: JSON.stringify({ model_name: modelName } as ModelDownloadRequest),
-    });
-    console.log('[API] triggerModelDownload response:', result);
-    return result;
-  }
-
-  async deleteModel(modelName: string): Promise<{ message: string }> {
-    return this.request<{ message: string }>(`/models/${modelName}`, {
-      method: 'DELETE',
-    });
-  }
-
-  // Task Management
-  async getActiveTasks(): Promise<ActiveTasksResponse> {
-    return this.request<ActiveTasksResponse>('/tasks/active');
   }
 
   // Audio Channels
@@ -343,10 +333,7 @@ class ApiClient {
     return this.request('/channels');
   }
 
-  async createChannel(data: {
-    name: string;
-    device_ids: string[];
-  }): Promise<{
+  async createChannel(data: { name: string; device_ids: string[] }): Promise<{
     id: string;
     name: string;
     is_default: boolean;
@@ -388,10 +375,7 @@ class ApiClient {
     return this.request(`/channels/${channelId}/voices`);
   }
 
-  async setChannelVoices(
-    channelId: string,
-    profileIds: string[],
-  ): Promise<{ message: string }> {
+  async setChannelVoices(channelId: string, profileIds: string[]): Promise<{ message: string }> {
     return this.request(`/channels/${channelId}/voices`, {
       method: 'PUT',
       body: JSON.stringify({ profile_ids: profileIds }),
@@ -402,10 +386,7 @@ class ApiClient {
     return this.request(`/profiles/${profileId}/channels`);
   }
 
-  async setProfileChannels(
-    profileId: string,
-    channelIds: string[],
-  ): Promise<{ message: string }> {
+  async setProfileChannels(profileId: string, channelIds: string[]): Promise<{ message: string }> {
     return this.request(`/profiles/${profileId}/channels`, {
       method: 'PUT',
       body: JSON.stringify({ channel_ids: channelIds }),
@@ -435,8 +416,12 @@ class ApiClient {
     });
   }
 
-  async deleteStory(storyId: string): Promise<void> {
-    await this.request<void>(`/stories/${storyId}`, {
+  async getStoryDeletePreview(storyId: string): Promise<DeletePreview> {
+    return this.request<DeletePreview>(`/stories/${encodeURIComponent(storyId)}/delete-preview`);
+  }
+
+  async deleteStory(storyId: string): Promise<DeleteReceipt> {
+    return this.request<DeleteReceipt>(`/stories/${encodeURIComponent(storyId)}`, {
       method: 'DELETE',
     });
   }
@@ -468,21 +453,33 @@ class ApiClient {
     });
   }
 
-  async moveStoryItem(storyId: string, itemId: string, data: StoryItemMove): Promise<StoryItemDetail> {
+  async moveStoryItem(
+    storyId: string,
+    itemId: string,
+    data: StoryItemMove,
+  ): Promise<StoryItemDetail> {
     return this.request<StoryItemDetail>(`/stories/${storyId}/items/${itemId}/move`, {
       method: 'PUT',
       body: JSON.stringify(data),
     });
   }
 
-  async trimStoryItem(storyId: string, itemId: string, data: StoryItemTrim): Promise<StoryItemDetail> {
+  async trimStoryItem(
+    storyId: string,
+    itemId: string,
+    data: StoryItemTrim,
+  ): Promise<StoryItemDetail> {
     return this.request<StoryItemDetail>(`/stories/${storyId}/items/${itemId}/trim`, {
       method: 'PUT',
       body: JSON.stringify(data),
     });
   }
 
-  async splitStoryItem(storyId: string, itemId: string, data: StoryItemSplit): Promise<StoryItemDetail[]> {
+  async splitStoryItem(
+    storyId: string,
+    itemId: string,
+    data: StoryItemSplit,
+  ): Promise<StoryItemDetail[]> {
     return this.request<StoryItemDetail[]>(`/stories/${storyId}/items/${itemId}/split`, {
       method: 'POST',
       body: JSON.stringify(data),
@@ -497,13 +494,10 @@ class ApiClient {
 
   async exportStoryAudio(storyId: string): Promise<Blob> {
     const url = `${this.getBaseUrl()}/stories/${storyId}/export-audio`;
-    const response = await fetch(url);
+    const response = await this.authenticatedFetch(url);
 
     if (!response.ok) {
-      const error = await response.json().catch(() => ({
-        detail: response.statusText,
-      }));
-      throw new Error(error.detail || `HTTP error! status: ${response.status}`);
+      await this.throwResponseError(response);
     }
 
     return response.blob();

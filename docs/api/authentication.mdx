@@ -1,55 +1,19 @@
 ---
-title: "Authentication"
-description: "API authentication and security"
+title: "Local trust boundary"
+description: "Loopback and same-UID authorization"
 ---
 
-## Current Status
+The product API is reachable only on loopback and is intended for the bundled
+Tauri application. CORS permits only the fixed local application and
+development origins. Every application request also carries a freshly generated
+`X-Kilix-Voicebox-Session` credential. Media elements use the same credential
+in an ephemeral URL; access logging is disabled so it is not recorded. The
+credential is retained only in process memory and changes with the sidecar.
 
-<Warning>
-  Authentication is not currently implemented in Voicebox. The API is intended for local use only.
-</Warning>
+Provider authorization is a separate boundary and does not use the product
+credential. Fixed private Unix sockets,
+0700 runtime-directory ownership, 0600 socket ownership, and Linux SO_PEERCRED
+same-UID checks establish the local peer boundary.
 
-## Local Usage
-
-For local development and usage:
-- API runs on `localhost:17493`
-- No authentication required
-- Access restricted to local machine
-
-## Future Implementation
-
-Authentication will be added in a future release for:
-- Remote deployments
-- Multi-user access
-- Production environments
-
-Planned authentication methods:
-- API keys
-- OAuth 2.0
-- JWT tokens
-
-## Security Best Practices
-
-Until authentication is implemented:
-
-<CardGroup cols={2}>
-  <Card title="Use VPN" icon="shield">
-    Use WireGuard or Tailscale for remote access
-  </Card>
-  <Card title="Reverse Proxy" icon="server">
-    Run behind nginx with basic auth
-  </Card>
-  <Card title="Firewall" icon="fire">
-    Restrict access to trusted IPs only
-  </Card>
-  <Card title="Local Only" icon="laptop">
-    Don't expose to public internet
-  </Card>
-</CardGroup>
-
-## Coming Soon
-
-- API key management
-- User accounts
-- Rate limiting
-- Access control
+This is defense for a loopback fallback, not a remote authentication scheme. Do
+not publish or proxy the API.

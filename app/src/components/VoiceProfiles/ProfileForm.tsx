@@ -30,6 +30,7 @@ import {
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
+import { apiClient } from '@/lib/api/client';
 import { LANGUAGE_CODES, LANGUAGE_OPTIONS, type LanguageCode } from '@/lib/constants/languages';
 import { useAudioPlayer } from '@/lib/hooks/useAudioPlayer';
 import { useAudioRecording } from '@/lib/hooks/useAudioRecording';
@@ -45,7 +46,6 @@ import { useSystemAudioCapture } from '@/lib/hooks/useSystemAudioCapture';
 import { useTranscription } from '@/lib/hooks/useTranscription';
 import { formatAudioDuration, getAudioDuration } from '@/lib/utils/audio';
 import { usePlatform } from '@/platform/PlatformContext';
-import { useServerStore } from '@/stores/serverStore';
 import { type ProfileFormDraft, useUIStore } from '@/stores/uiStore';
 import { AudioSampleRecording } from './AudioSampleRecording';
 import { AudioSampleSystem } from './AudioSampleSystem';
@@ -124,7 +124,6 @@ export function ProfileForm() {
   const avatarInputRef = useRef<HTMLInputElement>(null);
   const { isPlaying, playPause, cleanup: cleanupAudio } = useAudioPlayer();
   const isCreating = !editingProfileId;
-  const serverUrl = useServerStore((state) => state.serverUrl);
 
   const form = useForm<ProfileFormValues>({
     resolver: zodResolver(profileSchema),
@@ -157,8 +156,8 @@ export function ProfileForm() {
             form.clearErrors('sampleFile');
           }
         })
-        .catch((error) => {
-          console.error('Failed to get audio duration:', error);
+        .catch(() => {
+          console.error('VOICEBOX_AUDIO_DURATION_INVALID');
           setAudioDuration(null);
           // For recordings, we auto-stop at max duration, so we can skip validation errors
           const isRecordedFile =
@@ -263,11 +262,11 @@ export function ProfileForm() {
       setAvatarPreview(url);
       return () => URL.revokeObjectURL(url);
     } else if (editingProfile?.avatar_path) {
-      setAvatarPreview(`${serverUrl}/profiles/${editingProfile.id}/avatar`);
+      setAvatarPreview(apiClient.getAvatarUrl(editingProfile.id));
     } else {
       setAvatarPreview(null);
     }
-  }, [selectedAvatarFile, editingProfile, serverUrl]);
+  }, [selectedAvatarFile, editingProfile]);
 
   // Restore form state from draft or editing profile
   useEffect(() => {
@@ -385,6 +384,15 @@ export function ProfileForm() {
   async function handleRemoveAvatar() {
     if (editingProfileId && editingProfile?.avatar_path) {
       try {
+        const preview = await apiClient.getAvatarDeletePreview(editingProfileId);
+        const population = preview.files.join('\n');
+        if (
+          !window.confirm(
+            `Move ${preview.count}/${preview.total} owned entries to private recoverable trash?\n\n${population}`,
+          )
+        ) {
+          return;
+        }
         await deleteAvatar.mutateAsync(editingProfileId);
         toast({
           title: 'Avatar removed',

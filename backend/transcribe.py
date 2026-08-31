@@ -1,22 +1,81 @@
-"""
-STT (Speech-to-Text) module - delegates to backend abstraction layer.
-"""
+"""Transcription provider access; Voicebox contains no Whisper runtime."""
 
-from typing import Optional
-from .backends import get_stt_backend, STTBackend
+from __future__ import annotations
+
+import asyncio
+import uuid
+from pathlib import Path
+from typing import Any
+
+from .kilix_provider import (
+    TRANSCRIBE_ENDPOINT,
+    ProviderClient,
+    ProviderError,
+    runtime_directory_from_environment,
+)
 
 
-def get_whisper_model() -> STTBackend:
-    """
-    Get STT backend instance (MLX or PyTorch based on platform).
-    
-    Returns:
-        STT backend instance
-    """
-    return get_stt_backend()
+_client: ProviderClient | None = None
 
 
-def unload_whisper_model():
-    """Unload Whisper model to free memory."""
-    backend = get_stt_backend()
-    backend.unload_model()
+def get_transcribe_client(runtime_directory: Path | None = None) -> ProviderClient:
+    global _client
+    if runtime_directory is not None:
+        return ProviderClient(TRANSCRIBE_ENDPOINT, runtime_directory)
+    if _client is None:
+        _client = ProviderClient(TRANSCRIBE_ENDPOINT, runtime_directory_from_environment())
+    return _client
+
+
+async def status() -> dict[str, Any]:
+    client = get_transcribe_client()
+    request = {
+        "schema": client.endpoint.schema,
+        "type": "request",
+        "request_id": uuid.uuid4().hex,
+        "op": "status",
+        "deadline_ms": 5_000,
+        "args": {},
+    }
+    with await asyncio.to_thread(client.request, request) as reply:
+        result = reply.payload.get("result")
+        if type(result) is not dict:
+            raise ProviderError("INVALID_RESPONSE")
+        return result
+
+
+async def models() -> list[dict[str, Any]]:
+    client = get_transcribe_client()
+    request = {
+        "schema": client.endpoint.schema,
+        "type": "request",
+        "request_id": uuid.uuid4().hex,
+        "op": "models",
+        "deadline_ms": 5_000,
+        "args": {},
+    }
+    with await asyncio.to_thread(client.request, request) as reply:
+        result = reply.payload.get("result")
+        population = result.get("models") if type(result) is dict else None
+        if type(population) is not list or any(type(item) is not dict for item in population):
+            raise ProviderError("INVALID_RESPONSE")
+        return population
+
+
+async def unload_transcribe_model() -> None:
+    client = get_transcribe_client()
+    request = {
+        "schema": client.endpoint.schema,
+        "type": "request",
+        "request_id": uuid.uuid4().hex,
+        "op": "unload",
+        "deadline_ms": 30_000,
+        "args": {},
+    }
+    with await asyncio.to_thread(client.request, request):
+        return None
+
+
+def reset_client() -> None:
+    global _client
+    _client = None

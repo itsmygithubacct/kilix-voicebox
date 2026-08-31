@@ -5,7 +5,7 @@
     "": {
       "name": "voicebox-docs",
       "devDependencies": {
-        "mintlify": "latest",
+        "mintlify": "4.2.307",
       },
     },
   },

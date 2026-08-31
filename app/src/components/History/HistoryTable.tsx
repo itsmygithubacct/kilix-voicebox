@@ -26,14 +26,13 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { useToast } from '@/components/ui/use-toast';
 import { apiClient } from '@/lib/api/client';
-import type { HistoryResponse } from '@/lib/api/types';
+import type { DeletePreview, HistoryResponse } from '@/lib/api/types';
 import { BOTTOM_SAFE_AREA_PADDING } from '@/lib/constants/ui';
 import {
   useDeleteGeneration,
   useExportGeneration,
   useExportGenerationAudio,
   useHistory,
-  useImportGeneration,
 } from '@/lib/hooks/useHistory';
 import { cn } from '@/lib/utils/cn';
 import { formatDate, formatDuration } from '@/lib/utils/format';
@@ -50,11 +49,11 @@ export function HistoryTable() {
   const [isScrolled, setIsScrolled] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const loadMoreRef = useRef<HTMLDivElement>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  const [importDialogOpen, setImportDialogOpen] = useState(false);
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
-  const [generationToDelete, setGenerationToDelete] = useState<{ id: string; name: string } | null>(null);
+  const [generationToDelete, setGenerationToDelete] = useState<{ id: string; name: string } | null>(
+    null,
+  );
+  const [deletePreview, setDeletePreview] = useState<DeletePreview | null>(null);
   const limit = 20;
   const { toast } = useToast();
 
@@ -70,7 +69,6 @@ export function HistoryTable() {
   const deleteGeneration = useDeleteGeneration();
   const exportGeneration = useExportGeneration();
   const exportGenerationAudio = useExportGenerationAudio();
-  const importGeneration = useImportGeneration();
   const setAudioWithAutoPlay = usePlayerStore((state) => state.setAudioWithAutoPlay);
   const restartCurrentAudio = usePlayerStore((state) => state.restartCurrentAudio);
   const currentAudioId = usePlayerStore((state) => state.audioId);
@@ -96,13 +94,13 @@ export function HistoryTable() {
     }
   }, [historyData, page]);
 
-  // Reset to page 0 when deletions or imports occur
+  // Reset to page 0 when deletion succeeds.
   useEffect(() => {
-    if (deleteGeneration.isSuccess || importGeneration.isSuccess) {
+    if (deleteGeneration.isSuccess) {
       setPage(0);
       setAllHistory([]);
     }
-  }, [deleteGeneration.isSuccess, importGeneration.isSuccess]);
+  }, [deleteGeneration.isSuccess]);
 
   // Intersection Observer for infinite scroll
   useEffect(() => {
@@ -181,9 +179,19 @@ export function HistoryTable() {
     );
   };
 
-  const handleDeleteClick = (generationId: string, profileName: string) => {
-    setGenerationToDelete({ id: generationId, name: profileName });
-    setDeleteDialogOpen(true);
+  const handleDeleteClick = async (generationId: string, profileName: string) => {
+    try {
+      const preview = await apiClient.getGenerationDeletePreview(generationId);
+      setGenerationToDelete({ id: generationId, name: profileName });
+      setDeletePreview(preview);
+      setDeleteDialogOpen(true);
+    } catch (error) {
+      toast({
+        title: 'Could not preview deletion',
+        description: error instanceof Error ? error.message : 'DELETE_PREVIEW_FAILED',
+        variant: 'destructive',
+      });
+    }
   };
 
   const handleDeleteConfirm = () => {
@@ -191,31 +199,7 @@ export function HistoryTable() {
       deleteGeneration.mutate(generationToDelete.id);
       setDeleteDialogOpen(false);
       setGenerationToDelete(null);
-    }
-  };
-
-  const handleImportConfirm = () => {
-    if (selectedFile) {
-      importGeneration.mutate(selectedFile, {
-        onSuccess: (data) => {
-          setImportDialogOpen(false);
-          setSelectedFile(null);
-          if (fileInputRef.current) {
-            fileInputRef.current.value = '';
-          }
-          toast({
-            title: 'Generation imported',
-            description: data.message || 'Generation imported successfully',
-          });
-        },
-        onError: (error) => {
-          toast({
-            title: 'Failed to import generation',
-            description: error.message,
-            variant: 'destructive',
-          });
-        },
-      });
+      setDeletePreview(null);
     }
   };
 
@@ -257,18 +241,17 @@ export function HistoryTable() {
                     'flex items-stretch gap-4 h-26 border rounded-md p-3 bg-card hover:bg-muted/70 transition-colors text-left w-full',
                     isCurrentlyPlaying && 'bg-muted/70',
                   )}
-                  onMouseDown={(e) => {
-                    // Don't trigger play if clicking on textarea or if text is selected
-                    const target = e.target as HTMLElement;
-                    if (target.closest('textarea') || window.getSelection()?.toString()) {
-                      return;
-                    }
-                    handlePlay(gen.id, gen.text, gen.profile_id);
-                  }}
                 >
                   {/* Waveform icon */}
                   <div className="flex items-center shrink-0">
-                    <AudioWaveform className="h-5 w-5 text-muted-foreground" />
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      aria-label={isCurrentlyPlaying ? 'Restart generation' : 'Play generation'}
+                      onClick={() => handlePlay(gen.id, gen.text, gen.profile_id)}
+                    >
+                      <AudioWaveform className="h-5 w-5 text-muted-foreground" />
+                    </Button>
                   </div>
 
                   {/* Left side - Meta information */}
@@ -297,11 +280,7 @@ export function HistoryTable() {
                   </div>
 
                   {/* Far right - Ellipsis actions */}
-                  <div
-                    className="w-10 shrink-0 flex justify-end"
-                    onMouseDown={(e) => e.stopPropagation()}
-                    onClick={(e) => e.stopPropagation()}
-                  >
+                  <div className="w-10 shrink-0 flex justify-end">
                     <DropdownMenu>
                       <DropdownMenuTrigger asChild>
                         <Button
@@ -366,13 +345,30 @@ export function HistoryTable() {
         </>
       )}
 
-      <Dialog open={deleteDialogOpen} onOpenChange={setDeleteDialogOpen}>
+      <Dialog
+        open={deleteDialogOpen}
+        onOpenChange={(open) => {
+          setDeleteDialogOpen(open);
+          if (!open) {
+            setGenerationToDelete(null);
+            setDeletePreview(null);
+          }
+        }}
+      >
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Delete Generation</DialogTitle>
             <DialogDescription>
-              Are you sure you want to delete this generation from "{generationToDelete?.name}"? This action cannot be undone.
+              Move {deletePreview?.count ?? 0}/{deletePreview?.total ?? 0} owned entries for{' '}
+              {generationToDelete?.name} to private recoverable trash?
             </DialogDescription>
+            {deletePreview && (
+              <ul className="max-h-32 overflow-y-auto rounded border p-2 text-xs text-muted-foreground">
+                {deletePreview.files.map((file) => (
+                  <li key={file}>{file}</li>
+                ))}
+              </ul>
+            )}
           </DialogHeader>
           <DialogFooter>
             <Button
@@ -390,37 +386,6 @@ export function HistoryTable() {
               disabled={deleteGeneration.isPending}
             >
               {deleteGeneration.isPending ? 'Deleting...' : 'Delete'}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      <Dialog open={importDialogOpen} onOpenChange={setImportDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Import Generation</DialogTitle>
-            <DialogDescription>
-              Import the generation from "{selectedFile?.name}". This will add it to your history.
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              onClick={() => {
-                setImportDialogOpen(false);
-                setSelectedFile(null);
-                if (fileInputRef.current) {
-                  fileInputRef.current.value = '';
-                }
-              }}
-            >
-              Cancel
-            </Button>
-            <Button
-              onClick={handleImportConfirm}
-              disabled={importGeneration.isPending || !selectedFile}
-            >
-              {importGeneration.isPending ? 'Importing...' : 'Import'}
             </Button>
           </DialogFooter>
         </DialogContent>

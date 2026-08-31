@@ -1,6 +1,7 @@
 import { Loader2, Mic } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Checkbox } from '@/components/ui/checkbox';
 import {
   Form,
   FormControl,
@@ -98,7 +99,7 @@ export function GenerationForm() {
               )}
             />
 
-            <div className="grid gap-4 md:grid-cols-3">
+            <div className="grid gap-4 md:grid-cols-2">
               <FormField
                 control={form.control}
                 name="language"
@@ -119,29 +120,6 @@ export function GenerationForm() {
                         ))}
                       </SelectContent>
                     </Select>
-                    <FormMessage />
-                  </FormItem>
-                )}
-              />
-
-              <FormField
-                control={form.control}
-                name="modelSize"
-                render={({ field }) => (
-                  <FormItem>
-                    <FormLabel>Model Size</FormLabel>
-                    <Select onValueChange={field.onChange} defaultValue={field.value}>
-                      <FormControl>
-                        <SelectTrigger>
-                          <SelectValue />
-                        </SelectTrigger>
-                      </FormControl>
-                      <SelectContent>
-                        <SelectItem value="1.7B">Qwen TTS 1.7B (Higher Quality)</SelectItem>
-                        <SelectItem value="0.6B">Qwen TTS 0.6B (Faster)</SelectItem>
-                      </SelectContent>
-                    </Select>
-                    <FormDescription>Larger models produce better quality</FormDescription>
                     <FormMessage />
                   </FormItem>
                 )}
@@ -170,10 +148,32 @@ export function GenerationForm() {
               />
             </div>
 
+            <FormField
+              control={form.control}
+              name="consentAsserted"
+              render={({ field }) => (
+                <FormItem>
+                  <div className="flex items-start gap-3 rounded-md border p-3">
+                    <FormControl>
+                      <Checkbox checked={field.value} onCheckedChange={field.onChange} />
+                    </FormControl>
+                    <div>
+                      <FormLabel>I have permission to use this voice sample</FormLabel>
+                      <FormDescription>
+                        Voice cloning requires the speaker's consent. Voicebox records this
+                        attestation with the source digest and derived-output provenance.
+                      </FormDescription>
+                    </div>
+                  </div>
+                  <FormMessage />
+                </FormItem>
+              )}
+            />
+
             <Button
               type="submit"
               className="w-full"
-              disabled={isPending || !selectedProfileId}
+              disabled={isPending || !selectedProfileId || !form.watch('consentAsserted')}
             >
               {isPending ? (
                 <>

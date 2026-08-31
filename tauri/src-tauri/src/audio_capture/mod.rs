@@ -1,22 +1,23 @@
+#[cfg(target_os = "linux")]
+mod linux;
 #[cfg(target_os = "macos")]
 mod macos;
 #[cfg(target_os = "windows")]
 mod windows;
-#[cfg(target_os = "linux")]
-mod linux;
 
+#[cfg(target_os = "linux")]
+pub use linux::*;
 #[cfg(target_os = "macos")]
 pub use macos::*;
 #[cfg(target_os = "windows")]
 pub use windows::*;
-#[cfg(target_os = "linux")]
-pub use linux::*;
 
 use std::sync::{Arc, Mutex};
 
 #[cfg(target_os = "macos")]
 use screencapturekit::stream::sc_stream::SCStream;
 
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 pub struct AudioCaptureState {
     pub samples: Arc<Mutex<Vec<f32>>>,
     pub sample_rate: Arc<Mutex<u32>>,
@@ -40,6 +41,7 @@ impl AudioCaptureState {
         }
     }
 
+    #[cfg_attr(target_os = "linux", allow(dead_code))]
     pub fn reset(&self) {
         *self.samples.lock().unwrap() = Vec::new();
         *self.error.lock().unwrap() = None;
