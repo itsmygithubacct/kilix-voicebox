@@ -166,14 +166,14 @@ check-kilix: ## Verify the provider-only Voicebox boundary
 		[[ "$$bootstrap_output" == "VOICEBOX_CURATED_IMPORT: PASS ("* ]]; \
 		[[ "$$bootstrap_output" != *$$'\n'* ]]; \
 		printf '%s\n' "$$bootstrap_output"
-	uv run --frozen python -I -m unittest discover -s .kilix-import -p 'test_*.py' -v
-	uv run --frozen python -I tools/check_kilix_boundary.py
-	uv run --frozen python -I tools/check_import_inventory.py
+	uv run --frozen --isolated python -I -m unittest discover -s .kilix-import -p 'test_*.py' -v
+	uv run --frozen --isolated python -I tools/check_kilix_boundary.py
+	uv run --frozen --isolated python -I tools/check_import_inventory.py
 
 check-backend: check-kilix ## Run backend compile and unit controls
-	uv run --frozen python -I -m compileall -q backend
-	uv run --frozen --group dev ruff check backend tools
-	uv run --frozen --group dev python -I -m unittest discover -s backend/tests -t . -p 'test_*.py' -v
+	uv run --frozen --isolated python -I -m compileall -q backend
+	uv run --frozen --isolated --group dev ruff check backend tools
+	uv run --frozen --isolated --group dev python -I -m unittest discover -s backend/tests -t . -p 'test_*.py' -v
 
 check-frontend: ## Run deterministic frontend lint and type controls
 	$(BUN) run --cwd $(APP_DIR) lint
@@ -195,7 +195,8 @@ test: test-backend test-frontend ## Run all tests
 
 test-backend: ## Run Python backend tests (requires pytest)
 	@echo -e "$(BLUE)Running backend tests...$(NC)"
-	uv run --frozen --group dev python -m unittest discover -s backend/tests -p 'test_*.py' -v
+	uv run --frozen --isolated --group dev python -I -m unittest discover \
+		-s backend/tests -t . -p 'test_*.py' -v
 
 test-frontend: ## Run frontend tests (requires test script in package.json)
 	@echo -e "$(BLUE)Running frontend tests...$(NC)"

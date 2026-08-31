@@ -78,6 +78,9 @@ make check
 python3 -m unittest discover -s .kilix-import -p 'test_*.py' -v
 ```
 
+The Make checks create frozen isolated Python environments rather than trusting
+an ignored or pre-existing project virtualenv.
+
 The checker reconstructs a temporary Git index from the root product snapshot
 and requires its 406/406 source paths to equal the accepted upstream tree. It
 then requires the exact hygiene boundary to remain an ancestor 1/1 and limits
