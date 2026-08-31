@@ -36,6 +36,101 @@ MAX_RECOVERABLE_STORY_ITEMS = 4_096
 MAX_STORY_EXPORT_SAMPLES = 21_600_000
 
 
+def _generation_duration_ms(generation: DBGeneration) -> int | None:
+    duration = generation.duration
+    if (
+        type(duration) not in {float, int}
+        or not math.isfinite(duration)
+        or duration <= 0
+    ):
+        return None
+    duration_ms = int(duration * 1_000)
+    if not 0 < duration_ms <= MAX_STORY_TIMELINE_MS:
+        return None
+    return duration_ms
+
+
+def _story_window(
+    generation: DBGeneration,
+    *,
+    start_time_ms: int,
+    trim_start_ms: int = 0,
+    trim_end_ms: int = 0,
+) -> tuple[int, int] | None:
+    """Return bounded effective duration and end time, or refuse the state."""
+
+    duration_ms = _generation_duration_ms(generation)
+    if (
+        duration_ms is None
+        or type(start_time_ms) is not int
+        or type(trim_start_ms) is not int
+        or type(trim_end_ms) is not int
+        or start_time_ms < 0
+        or trim_start_ms < 0
+        or trim_end_ms < 0
+    ):
+        return None
+    effective_duration_ms = duration_ms - trim_start_ms - trim_end_ms
+    end_time_ms = start_time_ms + effective_duration_ms
+    if effective_duration_ms <= 0 or end_time_ms > MAX_STORY_TIMELINE_MS:
+        return None
+    return effective_duration_ms, end_time_ms
+
+
+def _item_window(
+    item: DBStoryItem,
+    generation: DBGeneration,
+    *,
+    start_time_ms: int | None = None,
+    trim_start_ms: int | None = None,
+    trim_end_ms: int | None = None,
+) -> tuple[int, int] | None:
+    return _story_window(
+        generation,
+        start_time_ms=(item.start_time_ms if start_time_ms is None else start_time_ms),
+        trim_start_ms=(
+            getattr(item, "trim_start_ms", 0)
+            if trim_start_ms is None else trim_start_ms
+        ),
+        trim_end_ms=(
+            getattr(item, "trim_end_ms", 0)
+            if trim_end_ms is None else trim_end_ms
+        ),
+    )
+
+
+def _story_item_count(story_id: str, db: Session) -> int:
+    value = db.query(func.count(DBStoryItem.id)).filter(
+        DBStoryItem.story_id == story_id
+    ).scalar()
+    return int(value or 0)
+
+
+def _bounded_story_items(
+    story_id: str,
+    db: Session,
+) -> list[tuple[DBStoryItem, DBGeneration]] | None:
+    """Load a complete story only when every persisted window is exportable."""
+
+    item_count = _story_item_count(story_id, db)
+    if item_count > MAX_STORY_ITEMS:
+        return None
+    rows = db.query(
+        DBStoryItem,
+        DBGeneration,
+    ).join(
+        DBGeneration,
+        DBStoryItem.generation_id == DBGeneration.id,
+    ).filter(
+        DBStoryItem.story_id == story_id,
+    ).limit(MAX_STORY_ITEMS + 1).all()
+    if len(rows) != item_count:
+        return None
+    if any(_item_window(item, generation) is None for item, generation in rows):
+        return None
+    return rows
+
+
 def _story_delete_records(story: DBStory, db: Session) -> dict[str, dict]:
     items = (
         db.query(DBStoryItem)
@@ -315,6 +410,8 @@ async def add_item_to_story(
         generation_id=data.generation_id
     ).first()
     if existing:
+        if _item_window(existing, generation) is None:
+            return None
         # Return existing item
         profile = db.query(DBVoiceProfile).filter_by(id=generation.profile_id).first()
         return StoryItemDetail(
@@ -337,32 +434,31 @@ async def add_item_to_story(
             generation_created_at=generation.created_at,
         )
 
+    existing_items = _bounded_story_items(story_id, db)
+    if existing_items is None or len(existing_items) >= MAX_STORY_ITEMS:
+        return None
+
     # Calculate start_time_ms if not provided
     if data.start_time_ms is not None:
         start_time_ms = data.start_time_ms
     else:
-        # Find the maximum end time (start_time_ms + duration_ms) of existing items
-        existing_items = db.query(
-            DBStoryItem,
-            DBGeneration
-        ).join(
-            DBGeneration,
-            DBStoryItem.generation_id == DBGeneration.id
-        ).filter(
-            DBStoryItem.story_id == story_id
-        ).all()
-        
         if not existing_items:
             # First item starts at 0
             start_time_ms = 0
         else:
             max_end_time_ms = 0
             for item, gen in existing_items:
-                item_end_ms = item.start_time_ms + int(gen.duration * 1000)
+                window = _item_window(item, gen)
+                if window is None:
+                    return None
+                _duration_ms, item_end_ms = window
                 max_end_time_ms = max(max_end_time_ms, item_end_ms)
             
             # Add 200ms gap after the last item
             start_time_ms = max_end_time_ms + 200
+
+    if _story_window(generation, start_time_ms=start_time_ms) is None:
+        return None
 
     # Get track from data or default to 0
     track = data.track if data.track is not None else 0
@@ -438,6 +534,12 @@ async def move_story_item(
     # Get the generation
     generation = db.query(DBGeneration).filter_by(id=item.generation_id).first()
     if not generation:
+        return None
+
+    if (
+        _bounded_story_items(story_id, db) is None
+        or _item_window(item, generation, start_time_ms=data.start_time_ms) is None
+    ):
         return None
 
     # Update position and track
@@ -542,10 +644,16 @@ async def trim_story_item(
     if not generation:
         return None
 
-    # Validate trim values don't exceed duration
-    max_duration_ms = int(generation.duration * 1000)
-    if data.trim_start_ms + data.trim_end_ms >= max_duration_ms:
-        return None  # Invalid trim - would result in zero or negative duration
+    if (
+        _bounded_story_items(story_id, db) is None
+        or _item_window(
+            item,
+            generation,
+            trim_start_ms=data.trim_start_ms,
+            trim_end_ms=data.trim_end_ms,
+        ) is None
+    ):
+        return None
 
     # Update trim values
     item.trim_start_ms = data.trim_start_ms
@@ -614,11 +722,18 @@ async def split_story_item(
     if not generation:
         return None
 
+    story_items = _bounded_story_items(story_id, db)
+    if story_items is None or len(story_items) >= MAX_STORY_ITEMS:
+        return None
+
     # Calculate effective duration and validate split point
     current_trim_start = getattr(item, 'trim_start_ms', 0)
     current_trim_end = getattr(item, 'trim_end_ms', 0)
-    original_duration_ms = int(generation.duration * 1000)
-    effective_duration_ms = original_duration_ms - current_trim_start - current_trim_end
+    original_duration_ms = _generation_duration_ms(generation)
+    current_window = _item_window(item, generation)
+    if original_duration_ms is None or current_window is None:
+        return None
+    effective_duration_ms, _current_end_ms = current_window
 
     # Validate split_time_ms is within the effective duration
     if data.split_time_ms <= 0 or data.split_time_ms >= effective_duration_ms:
@@ -627,15 +742,33 @@ async def split_story_item(
     # Calculate the absolute time in the original audio where we're splitting
     absolute_split_ms = current_trim_start + data.split_time_ms
 
+    original_trim_end_ms = original_duration_ms - absolute_split_ms
+    new_start_time_ms = item.start_time_ms + data.split_time_ms
+    if (
+        _story_window(
+            generation,
+            start_time_ms=item.start_time_ms,
+            trim_start_ms=current_trim_start,
+            trim_end_ms=original_trim_end_ms,
+        ) is None
+        or _story_window(
+            generation,
+            start_time_ms=new_start_time_ms,
+            trim_start_ms=absolute_split_ms,
+            trim_end_ms=current_trim_end,
+        ) is None
+    ):
+        return None
+
     # Update original clip: trim from the end
-    item.trim_end_ms = original_duration_ms - absolute_split_ms
+    item.trim_end_ms = original_trim_end_ms
 
     # Create new clip: starts after the split, trimmed from the start
     new_item = DBStoryItem(
         id=str(uuid.uuid4()),
         story_id=story_id,
         generation_id=item.generation_id,  # Same generation, different trim
-        start_time_ms=item.start_time_ms + data.split_time_ms,
+        start_time_ms=new_start_time_ms,
         track=item.track,
         trim_start_ms=absolute_split_ms,
         trim_end_ms=current_trim_end,
@@ -730,18 +863,32 @@ async def duplicate_story_item(
     if not generation:
         return None
 
+    story_items = _bounded_story_items(story_id, db)
+    if story_items is None or len(story_items) >= MAX_STORY_ITEMS:
+        return None
+
     # Calculate effective duration
     current_trim_start = getattr(original_item, 'trim_start_ms', 0)
     current_trim_end = getattr(original_item, 'trim_end_ms', 0)
-    original_duration_ms = int(generation.duration * 1000)
-    effective_duration_ms = original_duration_ms - current_trim_start - current_trim_end
+    current_window = _item_window(original_item, generation)
+    if current_window is None:
+        return None
+    _effective_duration_ms, current_end_time_ms = current_window
+    new_start_time_ms = current_end_time_ms + 200
+    if _story_window(
+        generation,
+        start_time_ms=new_start_time_ms,
+        trim_start_ms=current_trim_start,
+        trim_end_ms=current_trim_end,
+    ) is None:
+        return None
 
     # Create duplicate item - place it right after the original
     new_item = DBStoryItem(
         id=str(uuid.uuid4()),
         story_id=story_id,
         generation_id=original_item.generation_id,  # Same generation as original
-        start_time_ms=original_item.start_time_ms + effective_duration_ms + 200,  # 200ms gap
+        start_time_ms=new_start_time_ms,
         track=original_item.track,
         trim_start_ms=current_trim_start,
         trim_end_ms=current_trim_end,
@@ -802,18 +949,26 @@ async def update_story_item_times(
     if not story:
         return False
 
-    # Get all items for this story
-    items = db.query(DBStoryItem).filter_by(story_id=story_id).all()
-    item_map = {item.id: item for item in items}
+    # Validate the complete persisted story before changing any item.
+    items_with_gen = _bounded_story_items(story_id, db)
+    if items_with_gen is None:
+        return False
+    item_map = {item.id: (item, generation) for item, generation in items_with_gen}
     update_ids = [update.item_id for update in data.updates]
-    if len(update_ids) != len(set(update_ids)):
+    if len(update_ids) != len(set(update_ids)) or not set(update_ids) <= set(item_map):
         return False
 
-    # Verify all item IDs belong to this story and update timecodes
-    for update in data.updates:
-        if update.item_id not in item_map:
+    proposed_starts = {update.item_id: update.start_time_ms for update in data.updates}
+    for item_id, (item, generation) in item_map.items():
+        if _item_window(
+            item,
+            generation,
+            start_time_ms=proposed_starts.get(item_id, item.start_time_ms),
+        ) is None:
             return False
-        item_map[update.item_id].start_time_ms = update.start_time_ms
+
+    for item_id, start_time_ms in proposed_starts.items():
+        item_map[item_id][0].start_time_ms = start_time_ms
 
     # Update story updated_at
     story.updated_at = datetime.utcnow()
@@ -844,6 +999,14 @@ async def reorder_story_items(
     if not story:
         return None
 
+    item_count = _story_item_count(story_id, db)
+    if (
+        item_count > MAX_STORY_ITEMS
+        or type(gap_ms) is not int
+        or not 0 <= gap_ms <= MAX_STORY_TIMELINE_MS
+    ):
+        return None
+
     # Get all items for this story with their generation data
     items_with_gen = db.query(
         DBStoryItem,
@@ -857,7 +1020,10 @@ async def reorder_story_items(
         DBGeneration.profile_id == DBVoiceProfile.id
     ).filter(
         DBStoryItem.story_id == story_id
-    ).all()
+    ).limit(MAX_STORY_ITEMS + 1).all()
+
+    if len(items_with_gen) != item_count:
+        return None
 
     # Create maps for quick lookup
     item_map = {
@@ -873,28 +1039,28 @@ async def reorder_story_items(
     ):
         return None
 
-    # Recalculate timecodes based on new order
+    # Plan every new timecode before mutating any database object.
     current_time_ms = 0
-    updated_items = []
+    planned_items = []
 
     for item_id in item_ids:
         item, generation, profile_name = item_map[item_id]
-        
-        # Update the item's start time
-        item.start_time_ms = current_time_ms
-        
-        # Calculate the duration in ms
-        duration_ms = (
-            int(generation.duration * 1000)
-            - getattr(item, "trim_start_ms", 0)
-            - getattr(item, "trim_end_ms", 0)
+        window = _item_window(
+            item,
+            generation,
+            start_time_ms=current_time_ms,
         )
-        if duration_ms <= 0 or current_time_ms + duration_ms > MAX_STORY_TIMELINE_MS:
-            db.rollback()
+        if window is None:
             return None
-        
+        _duration_ms, end_time_ms = window
+        planned_items.append((item, generation, profile_name, current_time_ms))
+
         # Move to next position (current end + gap)
-        current_time_ms += duration_ms + gap_ms
+        current_time_ms = end_time_ms + gap_ms
+
+    updated_items = []
+    for item, generation, profile_name, start_time_ms in planned_items:
+        item.start_time_ms = start_time_ms
 
         # Build the response item
         updated_items.append(StoryItemDetail(
@@ -942,6 +1108,12 @@ async def export_story_audio(
     if not story:
         return None
 
+    item_count = _story_item_count(story_id, db)
+    if item_count == 0:
+        return None
+    if item_count > MAX_STORY_ITEMS:
+        raise ValueError("STORY_EXPORT_ITEM_BOUND")
+
     # Get all items ordered by start_time_ms
     items = db.query(
         DBStoryItem,
@@ -953,47 +1125,34 @@ async def export_story_audio(
         DBStoryItem.story_id == story_id
     ).order_by(DBStoryItem.start_time_ms).limit(MAX_STORY_ITEMS + 1).all()
 
-    if not items:
-        return None
-    if len(items) > MAX_STORY_ITEMS:
-        raise ValueError("STORY_EXPORT_ITEM_BOUND")
+    # Orphaned items must not silently disappear from the exported timeline.
+    if len(items) != item_count:
+        raise ValueError("STORY_EXPORT_SOURCE")
 
-    clip_bounds: list[tuple[DBStoryItem, DBGeneration, int]] = []
+    clip_bounds: list[tuple[DBStoryItem, int, Path]] = []
     max_end_time_ms = 0
     for item, generation in items:
-        duration = generation.duration
-        trim_start_ms = getattr(item, "trim_start_ms", 0)
-        trim_end_ms = getattr(item, "trim_end_ms", 0)
-        if (
-            type(item.start_time_ms) is not int
-            or not 0 <= item.start_time_ms <= MAX_STORY_TIMELINE_MS
-            or type(duration) not in {float, int}
-            or not math.isfinite(duration)
-            or duration <= 0
-            or type(trim_start_ms) is not int
-            or type(trim_end_ms) is not int
-            or trim_start_ms < 0
-            or trim_end_ms < 0
-        ):
+        window = _item_window(item, generation)
+        if window is None:
             raise ValueError("STORY_EXPORT_BOUND")
-        effective_duration_ms = int(duration * 1000) - trim_start_ms - trim_end_ms
-        end_time_ms = item.start_time_ms + effective_duration_ms
-        if effective_duration_ms <= 0 or end_time_ms > MAX_STORY_TIMELINE_MS:
-            raise ValueError("STORY_EXPORT_BOUND")
+        effective_duration_ms, end_time_ms = window
+        try:
+            audio_path = owned_generation_path(generation)
+            if audio_path.is_symlink() or not audio_path.is_file():
+                raise ValueError("STORY_EXPORT_SOURCE")
+        except Exception:
+            raise ValueError("STORY_EXPORT_SOURCE") from None
         max_end_time_ms = max(max_end_time_ms, end_time_ms)
-        clip_bounds.append((item, generation, effective_duration_ms))
+        clip_bounds.append((item, effective_duration_ms, audio_path))
 
     sample_rate = 24_000
     total_samples = (max_end_time_ms * sample_rate + 999) // 1000
     if not 0 < total_samples <= MAX_STORY_EXPORT_SAMPLES:
         raise ValueError("STORY_EXPORT_BOUND")
 
-    final_audio: np.ndarray | None = None
-    for item, generation, _effective_duration_ms in clip_bounds:
+    final_audio = np.zeros(total_samples, dtype=np.float32)
+    for item, effective_duration_ms, audio_path in clip_bounds:
         try:
-            audio_path = owned_generation_path(generation)
-            if not audio_path.exists():
-                continue
             audio, sr = load_audio(
                 audio_path,
                 sample_rate=sample_rate,
@@ -1004,29 +1163,30 @@ async def export_story_audio(
             
             # Get trim values
             trim_start_ms = getattr(item, 'trim_start_ms', 0)
-            trim_end_ms = getattr(item, 'trim_end_ms', 0)
             
-            # Slice audio based on trim values
-            trim_start_sample = int((trim_start_ms / 1000.0) * sample_rate)
-            trim_end_sample = int((trim_end_ms / 1000.0) * sample_rate)
-            trim_stop_sample = len(audio) - trim_end_sample
-            if not 0 <= trim_start_sample < trim_stop_sample <= len(audio):
+            # Mix exactly the database-declared effective window. Extra
+            # decoded frames are ignored; a short source refuses the export.
+            trim_start_sample = (trim_start_ms * sample_rate) // 1000
+            expected_samples = (effective_duration_ms * sample_rate) // 1000
+            trim_stop_sample = trim_start_sample + expected_samples
+            if (
+                expected_samples <= 0
+                or not 0 <= trim_start_sample < trim_stop_sample <= len(audio)
+            ):
                 raise ValueError("STORY_EXPORT_TRIM")
             trimmed_audio = audio[trim_start_sample:trim_stop_sample]
 
-            if final_audio is None:
-                final_audio = np.zeros(total_samples, dtype=np.float32)
             start_sample = (item.start_time_ms * sample_rate) // 1000
-            end_sample = min(start_sample + len(trimmed_audio), total_samples)
-            if start_sample >= total_samples or end_sample <= start_sample:
+            end_sample = start_sample + expected_samples
+            if (
+                start_sample >= total_samples
+                or end_sample <= start_sample
+                or end_sample > total_samples
+            ):
                 raise ValueError("STORY_EXPORT_BOUND")
-            final_audio[start_sample:end_sample] += trimmed_audio[:end_sample - start_sample]
+            final_audio[start_sample:end_sample] += trimmed_audio
         except Exception:
-            # Skip files that can't be loaded
-            continue
-
-    if final_audio is None:
-        return None
+            raise ValueError("STORY_EXPORT_SOURCE") from None
 
     # Normalize to prevent clipping
     max_val = np.abs(final_audio).max()

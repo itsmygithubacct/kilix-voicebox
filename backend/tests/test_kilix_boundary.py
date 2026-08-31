@@ -908,6 +908,156 @@ class StoryBoundaryTests(unittest.TestCase):
         finally:
             db.close()
 
+    def test_story_mutations_refuse_unexportable_windows_and_population(self) -> None:
+        db = self._session()
+        try:
+            self._story_fixture(db)
+            db.add(DBGeneration(
+                id="generation-2", profile_id="profile-1", text="again",
+                language="en", audio_path="/private/generation-2.wav",
+                duration=1.0, seed=8, instruct=None,
+            ))
+            db.commit()
+
+            refused_add = asyncio.run(stories.add_item_to_story(
+                "story-1",
+                models.StoryItemCreate(
+                    generation_id="generation-2",
+                    start_time_ms=models.MAX_STORY_TIMELINE_MS,
+                ),
+                db,
+            ))
+            self.assertIsNone(refused_add)
+            self.assertEqual(db.query(DBStoryItem).count(), 1)
+
+            refused_move = asyncio.run(stories.move_story_item(
+                "story-1", "item-1",
+                models.StoryItemMove(start_time_ms=models.MAX_STORY_TIMELINE_MS),
+                db,
+            ))
+            self.assertIsNone(refused_move)
+            self.assertEqual(
+                db.query(DBStoryItem).filter_by(id="item-1").one().start_time_ms,
+                0,
+            )
+
+            refused_batch = asyncio.run(stories.update_story_item_times(
+                "story-1",
+                models.StoryItemBatchUpdate(updates=[
+                    models.StoryItemUpdateTime(
+                        item_id="item-1",
+                        start_time_ms=models.MAX_STORY_TIMELINE_MS,
+                    )
+                ]),
+                db,
+            ))
+            self.assertFalse(refused_batch)
+            item = db.query(DBStoryItem).filter_by(id="item-1").one()
+            self.assertEqual(item.start_time_ms, 0)
+
+            item.start_time_ms = models.MAX_STORY_TIMELINE_MS - 1_000
+            db.commit()
+            self.assertIsNone(asyncio.run(stories.duplicate_story_item(
+                "story-1", "item-1", db
+            )))
+            self.assertIsNone(asyncio.run(stories.add_item_to_story(
+                "story-1", models.StoryItemCreate(generation_id="generation-2"), db
+            )))
+            self.assertEqual(db.query(DBStoryItem).count(), 1)
+
+            db.add_all([
+                DBStoryItem(
+                    id=f"population-{index}", story_id="story-1",
+                    generation_id="generation-1", start_time_ms=0, track=0,
+                    trim_start_ms=0, trim_end_ms=0,
+                )
+                for index in range(models.MAX_STORY_ITEMS - 1)
+            ])
+            db.commit()
+            self.assertEqual(
+                db.query(DBStoryItem).count(), models.MAX_STORY_ITEMS
+            )
+            self.assertIsNone(asyncio.run(stories.duplicate_story_item(
+                "story-1", "item-1", db
+            )))
+            self.assertIsNone(asyncio.run(stories.split_story_item(
+                "story-1", "item-1", models.StoryItemSplit(split_time_ms=400), db
+            )))
+            self.assertEqual(
+                db.query(DBStoryItem).count(), models.MAX_STORY_ITEMS
+            )
+        finally:
+            db.close()
+
+    def test_story_export_refuses_missing_and_corrupt_clips(self) -> None:
+        for source_state in ("missing", "corrupt"):
+            with self.subTest(source_state=source_state), tempfile.TemporaryDirectory() as directory:
+                db = self._session()
+                try:
+                    self._story_fixture(db)
+                    privacy = Path(directory) / "privacy"
+                    generations = privacy / "generations"
+                    generations.mkdir(parents=True)
+                    first_path = generations / "generation-1.wav"
+                    second_path = generations / "generation-2.wav"
+                    first_path.write_bytes(wav_bytes(frames=24_000))
+                    if source_state == "corrupt":
+                        second_path.write_bytes(b"not an audio file")
+                    generation = db.query(DBGeneration).filter_by(
+                        id="generation-1"
+                    ).one()
+                    generation.audio_path = str(first_path)
+                    db.add(DBGeneration(
+                        id="generation-2", profile_id="profile-1", text="again",
+                        language="en", audio_path=str(second_path), duration=1.0,
+                        seed=8, instruct=None,
+                    ))
+                    db.add(DBStoryItem(
+                        id="item-2", story_id="story-1",
+                        generation_id="generation-2", start_time_ms=1_000,
+                        track=0, trim_start_ms=0, trim_end_ms=0,
+                    ))
+                    db.commit()
+                    with (
+                        patch.object(
+                            stories.config, "get_privacy_dir", return_value=privacy
+                        ),
+                        self.assertRaisesRegex(ValueError, "^STORY_EXPORT_SOURCE$"),
+                    ):
+                        asyncio.run(stories.export_story_audio("story-1", db))
+                finally:
+                    db.close()
+
+    def test_trimmed_story_playback_uses_effective_duration(self) -> None:
+        root = Path(__file__).resolve().parents[2] / "app" / "src"
+        sources = (
+            root / "components" / "StoriesTab" / "StoryContent.tsx",
+            root / "components" / "StoriesTab" / "StoryChatItem.tsx",
+            root / "stores" / "storyStore.ts",
+        )
+        for source in sources:
+            with self.subTest(source=source.name):
+                text = source.read_text()
+                self.assertIn("item.trim_start_ms ?? 0", text)
+                self.assertIn("item.trim_end_ms ?? 0", text)
+
+    def test_voice_profile_docs_match_the_one_sample_boundary(self) -> None:
+        root = Path(__file__).resolve().parents[2] / "docs"
+        developer = (root / "developer" / "voice-profiles.mdx").read_text()
+        overview = (root / "overview" / "creating-voice-profiles.mdx").read_text()
+        combined = developer + overview
+        self.assertIn("Exactly one consented source sample is required", developer)
+        self.assertIn("exactly 1/1 source sample", overview)
+        for stale_claim in (
+            "Multiple Samples",
+            "Multiple samples (3-5)",
+            "Celebrity/Character Voices",
+            "combine_voice_prompts",
+            "Add more samples",
+        ):
+            with self.subTest(stale_claim=stale_claim):
+                self.assertNotIn(stale_claim, combined)
+
 
 class DesktopPolicyTests(unittest.TestCase):
     def test_production_csp_admits_fixed_loopback_images_and_media(self) -> None:

@@ -105,7 +105,11 @@ export function StoryContent() {
     }
     const playingItem = sortedItems.find((item) => {
       const itemStart = item.start_time_ms;
-      const itemEnd = item.start_time_ms + item.duration * 1000;
+      const itemEnd =
+        item.start_time_ms +
+        item.duration * 1000 -
+        (item.trim_start_ms ?? 0) -
+        (item.trim_end_ms ?? 0);
       return currentTimeMs >= itemStart && currentTimeMs < itemEnd;
     });
     return playingItem?.id ?? null;

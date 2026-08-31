@@ -41,7 +41,11 @@ export function StoryChatItem({
 
   // Check if this item is currently playing based on timecode
   const itemStartMs = item.start_time_ms;
-  const itemEndMs = item.start_time_ms + item.duration * 1000;
+  const itemEndMs =
+    item.start_time_ms +
+    item.duration * 1000 -
+    (item.trim_start_ms ?? 0) -
+    (item.trim_end_ms ?? 0);
   const isCurrentlyPlaying = isPlaying && currentTimeMs >= itemStartMs && currentTimeMs < itemEndMs;
 
   const handlePlay = () => {

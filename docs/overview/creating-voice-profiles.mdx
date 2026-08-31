@@ -102,51 +102,11 @@ Supported formats:
 - **Normal tone** - Speak as you normally would
 - **Complete sentences** - Avoid fragments or "ums"
 
-## Multiple Samples
+## One Consented Source Sample
 
-Adding multiple samples can significantly improve quality:
-
-### Why Multiple Samples?
-
-<CardGroup cols={2}>
-  <Card title="Robustness" icon="shield">
-    Model learns a more complete representation
-  </Card>
-  <Card title="Versatility" icon="palette">
-    Handles different speaking styles better
-  </Card>
-  <Card title="Quality" icon="star">
-    Reduces artifacts and improves naturalness
-  </Card>
-  <Card title="Consistency" icon="check">
-    More reliable across different texts
-  </Card>
-</CardGroup>
-
-### Sample Variety
-
-Consider adding samples with:
-
-1. **Different tones**
-   - Casual conversation
-   - Professional/formal
-   - Excited/enthusiastic
-   - Calm/serious
-
-2. **Different content**
-   - Narratives
-   - Questions
-   - Statements
-   - Emotions (happy, sad, neutral)
-
-3. **Different recording conditions**
-   - Studio quality
-   - Phone call quality (if needed)
-   - Room acoustics
-
-<Warning>
-  All samples should be from the **same speaker**. Mixing voices will produce poor results.
-</Warning>
+Each profile accepts exactly 1/1 source sample from a speaker who has explicitly
+consented to this use. To change the source voice or recording style, replace the
+existing sample; Voicebox refuses a second sample rather than combining voices.
 
 ## Processing Existing Audio
 
@@ -214,7 +174,7 @@ After creating a profile:
 
   <Step title="Iterate">
     If quality is poor:
-    - Add more samples
+    - Replace the source sample with a cleaner recording
     - Try different source audio
     - Check sample quality
   </Step>
@@ -244,14 +204,12 @@ After creating a profile:
 
 ## Advanced Tips
 
-### Celebrity/Character Voices
+### Consent and Identity
 
-For cloning public figures or characters:
-
-1. **Legal considerations** - Ensure you have rights or it's fair use
-2. **Source quality** - Find high-quality interview audio or clean clips
-3. **Consistency** - Use clips where they speak similarly
-4. **Multiple samples** - Very important for recognizable voices
+Only create a profile for your own voice or for a speaker who has explicitly
+consented and whose voice you have the right to use. Do not create profiles that
+impersonate public figures, private individuals, or characters without the
+necessary consent and rights.
 
 ### Accent & Dialect
 
@@ -267,7 +225,7 @@ The emotional tone of samples affects generation:
 
 - Energetic samples → Energetic output
 - Calm samples → Calm output
-- Mix samples for versatile profile
+- Record the one source sample in the style you want the profile to use
 
 ## Managing Profiles
 

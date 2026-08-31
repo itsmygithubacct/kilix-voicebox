@@ -116,31 +116,27 @@ async def add_profile_sample(
 
 ### Voice Prompt Creation
 
-When generating speech, samples are combined into a voice prompt:
+When generating speech, the profile's one consented source sample is used directly:
 
 ```python
 async def create_voice_prompt_for_profile(
     profile_id: str,
     db: Session,
 ) -> dict:
-    samples = db.query(DBProfileSample).filter_by(profile_id=profile_id).all()
-    
-    if len(samples) == 1:
-        # Single sample - use directly
-        voice_prompt, _ = await tts_model.create_voice_prompt(
-            sample.audio_path,
-            sample.reference_text,
-        )
-    else:
-        # Multiple samples - combine them
-        combined_audio, combined_text = await tts_model.combine_voice_prompts(
-            [s.audio_path for s in samples],
-            [s.reference_text for s in samples],
-        )
-        voice_prompt, _ = await tts_model.create_voice_prompt(
-            combined_audio_path,
-            combined_text,
-        )
+    samples = (
+        db.query(DBProfileSample)
+        .filter_by(profile_id=profile_id)
+        .limit(2)
+        .all()
+    )
+    if len(samples) != 1:
+        raise ValueError("Exactly one consented source sample is required")
+
+    sample = samples[0]
+    voice_prompt, _ = await tts_model.create_voice_prompt(
+        sample.audio_path,
+        sample.reference_text,
+    )
     
     return voice_prompt
 ```
@@ -189,7 +185,7 @@ profile_export.zip
 
 - Use clean audio with minimal background noise
 - Ensure the reference text exactly matches what is spoken
-- Multiple samples (3-5) improve voice cloning quality
+- Exactly 1 consented source sample is supported; replace it to change the voice
 
 ### Language Matching
 
