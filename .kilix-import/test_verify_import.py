@@ -418,13 +418,30 @@ class CuratedImportTests(unittest.TestCase):
             self.assertEqual(fake_gate.returncode, 0)
             self.assertIn(b"FAKE_GATE_PASS", fake_gate.stdout)
 
-            environment = os.environ.copy()
-            environment["GIT_NO_REPLACE_OBJECTS"] = "1"
             head_verifier = verify.git_blob(
                 root, "HEAD", ".kilix-import/verify_import.py"
             )
-            trusted_gate = subprocess.run(
+            poison = temporary / "python-path"
+            poison.mkdir()
+            (poison / "sitecustomize.py").write_text(
+                "import os\nos._exit(0)\n", encoding="utf-8"
+            )
+            environment = os.environ.copy()
+            environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+            environment["PYTHONPATH"] = str(poison)
+            unisolated_gate = subprocess.run(
                 (sys.executable, "-"),
+                cwd=root,
+                input=head_verifier,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
+            )
+            self.assertEqual(unisolated_gate.returncode, 0)
+            self.assertEqual(unisolated_gate.stdout, b"")
+            trusted_gate = subprocess.run(
+                (sys.executable, "-I", "-S", "-"),
                 cwd=root,
                 input=head_verifier,
                 check=False,

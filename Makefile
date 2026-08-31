@@ -155,21 +155,25 @@ typecheck: ## Run TypeScript type checking
 	bun run tsc --noEmit
 
 check-kilix: ## Verify the provider-only Voicebox boundary
-	@set -o pipefail; env -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+	@set -euo pipefail; bootstrap_output="$$(env \
+		-u GIT_ALTERNATE_OBJECT_DIRECTORIES \
 		-u GIT_COMMON_DIR -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS \
 		-u GIT_DIR -u GIT_INDEX_FILE -u GIT_NAMESPACE \
 		-u GIT_OBJECT_DIRECTORY -u GIT_QUARANTINE_PATH \
 		-u GIT_REPLACE_REF_BASE -u GIT_SHALLOW_FILE -u GIT_WORK_TREE \
 		GIT_NO_REPLACE_OBJECTS=1 git -C "$(CURDIR)" show \
-		HEAD:.kilix-import/verify_import.py | uv run --frozen python -
-	uv run --frozen python -m unittest discover -s .kilix-import -p 'test_*.py' -v
-	uv run --frozen python tools/check_kilix_boundary.py
-	uv run --frozen python tools/check_import_inventory.py
+		HEAD:.kilix-import/verify_import.py | $(PYTHON) -I -S -)"; \
+		[[ "$$bootstrap_output" == "VOICEBOX_CURATED_IMPORT: PASS ("* ]]; \
+		[[ "$$bootstrap_output" != *$$'\n'* ]]; \
+		printf '%s\n' "$$bootstrap_output"
+	uv run --frozen python -I -m unittest discover -s .kilix-import -p 'test_*.py' -v
+	uv run --frozen python -I tools/check_kilix_boundary.py
+	uv run --frozen python -I tools/check_import_inventory.py
 
 check-backend: check-kilix ## Run backend compile and unit controls
-	uv run --frozen python -m compileall -q backend
+	uv run --frozen python -I -m compileall -q backend
 	uv run --frozen --group dev ruff check backend tools
-	uv run --frozen --group dev python -m unittest discover -s backend/tests -p 'test_*.py' -v
+	uv run --frozen --group dev python -I -m unittest discover -s backend/tests -t . -p 'test_*.py' -v
 
 check-frontend: ## Run deterministic frontend lint and type controls
 	$(BUN) run --cwd $(APP_DIR) lint

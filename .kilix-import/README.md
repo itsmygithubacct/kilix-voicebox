@@ -58,13 +58,17 @@ verifier blob directly from `HEAD` at the repository root. `pipefail` is
 required so a failed object read cannot become an empty successful script:
 
 ```sh
-set -o pipefail
-env -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_COMMON_DIR \
+set -euo pipefail
+bootstrap_output="$(env \
+  -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_COMMON_DIR \
   -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_DIR \
   -u GIT_INDEX_FILE -u GIT_NAMESPACE -u GIT_OBJECT_DIRECTORY \
   -u GIT_QUARANTINE_PATH -u GIT_REPLACE_REF_BASE -u GIT_SHALLOW_FILE \
   -u GIT_WORK_TREE GIT_NO_REPLACE_OBJECTS=1 \
-  git -C "$PWD" show HEAD:.kilix-import/verify_import.py | python3 -
+  git -C "$PWD" show HEAD:.kilix-import/verify_import.py | python3 -I -S -)"
+[[ "$bootstrap_output" == "VOICEBOX_CURATED_IMPORT: PASS ("* ]]
+[[ "$bootstrap_output" != *$'\n'* ]]
+printf '%s\n' "$bootstrap_output"
 ```
 
 Only after that bootstrap passes, run the complete checks:
