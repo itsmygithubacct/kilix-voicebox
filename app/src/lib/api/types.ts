@@ -153,7 +153,7 @@ export interface StoryItemCreate {
 }
 
 export interface StoryItemUpdateTime {
-  generation_id: string;
+  item_id: string;
   start_time_ms: number;
 }
 
@@ -162,7 +162,7 @@ export interface StoryItemBatchUpdate {
 }
 
 export interface StoryItemReorder {
-  generation_ids: string[];
+  item_ids: string[];
 }
 
 export interface StoryItemMove {

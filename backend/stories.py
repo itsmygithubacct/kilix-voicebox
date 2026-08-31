@@ -4,6 +4,7 @@ Story management module.
 
 from typing import List, Optional
 from datetime import datetime
+import math
 import uuid
 import tempfile
 from pathlib import Path
@@ -20,6 +21,8 @@ from .models import (
     StoryItemMove,
     StoryItemTrim,
     StoryItemSplit,
+    MAX_STORY_ITEMS,
+    MAX_STORY_TIMELINE_MS,
 )
 from .database import Story as DBStory, StoryItem as DBStoryItem, Generation as DBGeneration, VoiceProfile as DBVoiceProfile
 from .utils.audio import load_audio, save_audio
@@ -30,6 +33,7 @@ import numpy as np
 
 
 MAX_RECOVERABLE_STORY_ITEMS = 4_096
+MAX_STORY_EXPORT_SAMPLES = 21_600_000
 
 
 def _story_delete_records(story: DBStory, db: Session) -> dict[str, dict]:
@@ -800,13 +804,16 @@ async def update_story_item_times(
 
     # Get all items for this story
     items = db.query(DBStoryItem).filter_by(story_id=story_id).all()
-    item_map = {item.generation_id: item for item in items}
+    item_map = {item.id: item for item in items}
+    update_ids = [update.item_id for update in data.updates]
+    if len(update_ids) != len(set(update_ids)):
+        return False
 
-    # Verify all generation IDs belong to this story and update timecodes
+    # Verify all item IDs belong to this story and update timecodes
     for update in data.updates:
-        if update.generation_id not in item_map:
+        if update.item_id not in item_map:
             return False
-        item_map[update.generation_id].start_time_ms = update.start_time_ms
+        item_map[update.item_id].start_time_ms = update.start_time_ms
 
     # Update story updated_at
     story.updated_at = datetime.utcnow()
@@ -817,7 +824,7 @@ async def update_story_item_times(
 
 async def reorder_story_items(
     story_id: str,
-    generation_ids: List[str],
+    item_ids: List[str],
     db: Session,
     gap_ms: int = 200,
 ) -> Optional[List[StoryItemDetail]]:
@@ -826,7 +833,7 @@ async def reorder_story_items(
 
     Args:
         story_id: Story ID
-        generation_ids: List of generation IDs in the desired order
+        item_ids: List of unique story item IDs in the desired order
         db: Database session
         gap_ms: Gap in milliseconds between items (default 200ms)
 
@@ -853,24 +860,38 @@ async def reorder_story_items(
     ).all()
 
     # Create maps for quick lookup
-    item_map = {item.generation_id: (item, gen, profile_name) for item, gen, profile_name in items_with_gen}
+    item_map = {
+        item.id: (item, gen, profile_name)
+        for item, gen, profile_name in items_with_gen
+    }
 
-    # Verify all generation IDs belong to this story
-    if set(generation_ids) != set(item_map.keys()):
+    # Verify the request names each exact story item once.
+    if (
+        len(item_ids) != len(item_map)
+        or len(item_ids) != len(set(item_ids))
+        or set(item_ids) != set(item_map)
+    ):
         return None
 
     # Recalculate timecodes based on new order
     current_time_ms = 0
     updated_items = []
 
-    for gen_id in generation_ids:
-        item, generation, profile_name = item_map[gen_id]
+    for item_id in item_ids:
+        item, generation, profile_name = item_map[item_id]
         
         # Update the item's start time
         item.start_time_ms = current_time_ms
         
         # Calculate the duration in ms
-        duration_ms = int(generation.duration * 1000)
+        duration_ms = (
+            int(generation.duration * 1000)
+            - getattr(item, "trim_start_ms", 0)
+            - getattr(item, "trim_end_ms", 0)
+        )
+        if duration_ms <= 0 or current_time_ms + duration_ms > MAX_STORY_TIMELINE_MS:
+            db.rollback()
+            return None
         
         # Move to next position (current end + gap)
         current_time_ms += duration_ms + gap_ms
@@ -930,16 +951,45 @@ async def export_story_audio(
         DBStoryItem.generation_id == DBGeneration.id
     ).filter(
         DBStoryItem.story_id == story_id
-    ).order_by(DBStoryItem.start_time_ms).all()
+    ).order_by(DBStoryItem.start_time_ms).limit(MAX_STORY_ITEMS + 1).all()
 
     if not items:
         return None
+    if len(items) > MAX_STORY_ITEMS:
+        raise ValueError("STORY_EXPORT_ITEM_BOUND")
 
-    # Load all audio files and calculate total duration
-    audio_data = []
-    sample_rate = 24000  # Default sample rate
-
+    clip_bounds: list[tuple[DBStoryItem, DBGeneration, int]] = []
+    max_end_time_ms = 0
     for item, generation in items:
+        duration = generation.duration
+        trim_start_ms = getattr(item, "trim_start_ms", 0)
+        trim_end_ms = getattr(item, "trim_end_ms", 0)
+        if (
+            type(item.start_time_ms) is not int
+            or not 0 <= item.start_time_ms <= MAX_STORY_TIMELINE_MS
+            or type(duration) not in {float, int}
+            or not math.isfinite(duration)
+            or duration <= 0
+            or type(trim_start_ms) is not int
+            or type(trim_end_ms) is not int
+            or trim_start_ms < 0
+            or trim_end_ms < 0
+        ):
+            raise ValueError("STORY_EXPORT_BOUND")
+        effective_duration_ms = int(duration * 1000) - trim_start_ms - trim_end_ms
+        end_time_ms = item.start_time_ms + effective_duration_ms
+        if effective_duration_ms <= 0 or end_time_ms > MAX_STORY_TIMELINE_MS:
+            raise ValueError("STORY_EXPORT_BOUND")
+        max_end_time_ms = max(max_end_time_ms, end_time_ms)
+        clip_bounds.append((item, generation, effective_duration_ms))
+
+    sample_rate = 24_000
+    total_samples = (max_end_time_ms * sample_rate + 999) // 1000
+    if not 0 < total_samples <= MAX_STORY_EXPORT_SAMPLES:
+        raise ValueError("STORY_EXPORT_BOUND")
+
+    final_audio: np.ndarray | None = None
+    for item, generation, _effective_duration_ms in clip_bounds:
         try:
             audio_path = owned_generation_path(generation)
             if not audio_path.exists():
@@ -949,72 +999,34 @@ async def export_story_audio(
                 sample_rate=sample_rate,
                 max_duration_seconds=900.0,
             )
-            sample_rate = sr  # Use actual sample rate from first file
+            if sr != sample_rate:
+                raise ValueError("STORY_EXPORT_SAMPLE_RATE")
             
             # Get trim values
             trim_start_ms = getattr(item, 'trim_start_ms', 0)
             trim_end_ms = getattr(item, 'trim_end_ms', 0)
             
-            # Calculate effective duration
-            original_duration_ms = int(generation.duration * 1000)
-            effective_duration_ms = original_duration_ms - trim_start_ms - trim_end_ms
-            
             # Slice audio based on trim values
             trim_start_sample = int((trim_start_ms / 1000.0) * sample_rate)
             trim_end_sample = int((trim_end_ms / 1000.0) * sample_rate)
-            
-            # Extract the trimmed portion
-            if trim_end_ms > 0:
-                trimmed_audio = audio[trim_start_sample:-trim_end_sample] if trim_end_sample > 0 else audio[trim_start_sample:]
-            else:
-                trimmed_audio = audio[trim_start_sample:]
-            
-            # Store audio with its timecode info
-            start_time_ms = item.start_time_ms
-            
-            audio_data.append({
-                'audio': trimmed_audio,
-                'start_time_ms': start_time_ms,
-                'duration_ms': effective_duration_ms,
-            })
+            trim_stop_sample = len(audio) - trim_end_sample
+            if not 0 <= trim_start_sample < trim_stop_sample <= len(audio):
+                raise ValueError("STORY_EXPORT_TRIM")
+            trimmed_audio = audio[trim_start_sample:trim_stop_sample]
+
+            if final_audio is None:
+                final_audio = np.zeros(total_samples, dtype=np.float32)
+            start_sample = (item.start_time_ms * sample_rate) // 1000
+            end_sample = min(start_sample + len(trimmed_audio), total_samples)
+            if start_sample >= total_samples or end_sample <= start_sample:
+                raise ValueError("STORY_EXPORT_BOUND")
+            final_audio[start_sample:end_sample] += trimmed_audio[:end_sample - start_sample]
         except Exception:
             # Skip files that can't be loaded
             continue
 
-    if not audio_data:
+    if final_audio is None:
         return None
-
-    # Calculate total duration: max(start_time_ms + duration_ms)
-    max_end_time_ms = max(
-        (data['start_time_ms'] + data['duration_ms'] for data in audio_data),
-        default=0
-    )
-    
-    # Convert to samples
-    total_samples = int((max_end_time_ms / 1000.0) * sample_rate)
-    
-    # Create output buffer initialized to zeros
-    final_audio = np.zeros(total_samples, dtype=np.float32)
-
-    # Mix each audio segment at its timecode position
-    for data in audio_data:
-        audio = data['audio']
-        start_time_ms = data['start_time_ms']
-        
-        # Calculate start sample index
-        start_sample = int((start_time_ms / 1000.0) * sample_rate)
-        
-        # Ensure we don't exceed buffer bounds
-        audio_length = len(audio)
-        end_sample = min(start_sample + audio_length, total_samples)
-        
-        if start_sample < total_samples:
-            # Trim audio if it extends beyond buffer
-            audio_to_mix = audio[:end_sample - start_sample]
-            
-            # Mix: add audio to existing buffer (overlapping audio will sum)
-            # Normalize to prevent clipping (simple approach: divide by max)
-            final_audio[start_sample:end_sample] += audio_to_mix
 
     # Normalize to prevent clipping
     max_val = np.abs(final_audio).max()

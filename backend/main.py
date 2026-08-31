@@ -1100,9 +1100,12 @@ async def reorder_story_items(
     db: Session = Depends(get_db),
 ):
     """Reorder story items and recalculate timecodes."""
-    items = await stories.reorder_story_items(story_id, data.generation_ids, db)
+    items = await stories.reorder_story_items(story_id, data.item_ids, db)
     if items is None:
-        raise HTTPException(status_code=400, detail="Invalid reorder request - ensure all generation IDs belong to this story")
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid reorder request - ensure all item IDs belong to this story",
+        )
     return items
 
 

@@ -9,6 +9,8 @@ import re
 import shutil
 import stat
 import uuid
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
@@ -21,6 +23,7 @@ MAX_RECORD_BYTES = 65_536
 MAX_RECOVERY_RECORDS = 4_097
 _IDENTIFIER = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$")
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
+_UTC_TIMESTAMP = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$")
 
 
 class StoreError(ValueError):
@@ -63,6 +66,71 @@ def _canonical(value: dict) -> bytes:
         raise StoreError("INVALID_RECORD", "record is not canonical JSON") from error
     _require(len(payload) <= MAX_RECORD_BYTES, "RECORD_TOO_LARGE", "record exceeds its bound")
     return payload + b"\n"
+
+
+def _consent_digest(consent: object) -> str:
+    _require(type(consent) is dict, "INVALID_RECORD", "stored consent is not an object")
+    _require(
+        set(consent) == {
+            "allowed_use", "asserted_by_peer", "purpose", "recorded_at",
+            "schema", "source_sha256",
+        },
+        "INVALID_RECORD",
+        "stored consent field population is invalid",
+    )
+    _require(consent.get("schema") == "kilix.voice.consent/candidate-v1",
+             "INVALID_RECORD", "stored consent schema is invalid")
+    _digest(consent.get("source_sha256"), "source_sha256")
+    _require(consent.get("asserted_by_peer") is True, "INVALID_RECORD",
+             "stored consent is not asserted")
+    allowed_use = consent.get("allowed_use")
+    purpose = consent.get("purpose")
+    _require(type(allowed_use) is str
+             and allowed_use in {"this-project", "named-purpose"},
+             "INVALID_RECORD", "stored consent allowed use is invalid")
+    if allowed_use == "this-project":
+        _require(purpose is None, "INVALID_RECORD",
+                 "this-project consent has a named purpose")
+    else:
+        try:
+            purpose_size = len(purpose.encode("utf-8")) if type(purpose) is str else 0
+        except UnicodeEncodeError as error:
+            raise StoreError("INVALID_RECORD", "stored consent purpose is invalid") from error
+        _require(type(purpose) is str and bool(purpose.strip()) and purpose_size <= 256,
+                 "INVALID_RECORD", "stored consent purpose is invalid")
+    recorded_at = consent.get("recorded_at")
+    _require(type(recorded_at) is str
+             and _UTC_TIMESTAMP.fullmatch(recorded_at) is not None, "INVALID_RECORD",
+             "stored consent timestamp is invalid")
+    try:
+        datetime.strptime(recorded_at, "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as error:
+        raise StoreError("INVALID_RECORD", "stored consent timestamp is invalid") from error
+    return hashlib.sha256(_canonical(consent)[:-1]).hexdigest()
+
+
+def _validated_consent_record(record: dict, expected_sha256: str) -> dict:
+    _require(
+        set(record) == {
+            "captured_at", "consent", "consent_sha256", "profile_id",
+            "schema", "source_container_sha256",
+        }
+        and record.get("schema") == "kilix.voicebox.consent-record/candidate-v1",
+        "INVALID_RECORD",
+        "stored consent record population is invalid",
+    )
+    _identifier(record.get("profile_id"), "profile_id")
+    _digest(record.get("source_container_sha256"), "source_container_sha256")
+    claimed = _digest(record.get("consent_sha256"), "consent_sha256")
+    actual = _consent_digest(record.get("consent"))
+    consent = record["consent"]
+    _require(
+        claimed == expected_sha256 == actual
+        and record.get("captured_at") == consent.get("recorded_at"),
+        "INVALID_RECORD",
+        "stored consent digest or capture time is invalid",
+    )
+    return consent
 
 
 def _private_directory(path: Path) -> None:
@@ -205,7 +273,8 @@ class ConsentAttestation:
         _digest(source_container_sha256, "source_container_sha256")
         _require(asserted_by_user is True, "CONSENT_REQUIRED",
                  "voice-cloning consent must be explicitly asserted")
-        _require(allowed_use in {"this-project", "named-purpose"}, "INVALID_CONSENT",
+        _require(type(allowed_use) is str
+                 and allowed_use in {"this-project", "named-purpose"}, "INVALID_CONSENT",
                  "allowed use is unsupported")
         if allowed_use == "named-purpose":
             _require(type(purpose) is str and bool(purpose.strip())
@@ -388,6 +457,17 @@ class PrivateVoiceStore:
                 "consent_sha256": attestation.sha256,
                 "captured_at": attestation.recorded_at,
             })
+        else:
+            existing = _read_private_record(destination)
+            consent = _validated_consent_record(existing, attestation.sha256)
+            _require(
+                existing.get("profile_id") == attestation.profile_id
+                and existing.get("source_container_sha256")
+                == attestation.source_container_sha256
+                and consent.get("source_sha256") == attestation.source_sha256,
+                "INVALID_RECORD",
+                "stored consent identity is invalid",
+            )
         return attestation
 
     def commit_generation(
@@ -404,11 +484,11 @@ class PrivateVoiceStore:
         consent_record = _read_private_record(
             self.consent_root / f"{provenance.consent_sha256}.json"
         )
-        consent = consent_record.get("consent")
+        consent = _validated_consent_record(
+            consent_record, provenance.consent_sha256
+        )
         _require(
-            consent_record.get("consent_sha256") == provenance.consent_sha256
-            and type(consent) is dict
-            and consent.get("source_sha256") == provenance.source_sha256,
+            consent.get("source_sha256") == provenance.source_sha256,
             "INVALID_RECORD",
             "generation provenance is not bound to stored consent",
         )
@@ -514,20 +594,23 @@ class PrivateVoiceStore:
         return value
 
     def _owned_path_population(self, paths: Iterable[Path]) -> tuple[str, ...]:
-        data_root = self.root.parent
+        data_root = self.root.parent.resolve(strict=True)
         logical: list[str] = []
         seen: set[Path] = set()
 
         def inspect(candidate: Path) -> None:
             try:
-                relative = candidate.relative_to(data_root)
+                resolved = candidate.resolve(strict=True)
+                relative = resolved.relative_to(data_root)
                 info = candidate.stat(follow_symlinks=False)
             except (OSError, ValueError) as error:
                 raise StoreError("UNSAFE_DELETE", "delete target is outside product storage") from error
+            _require(candidate == resolved, "UNSAFE_DELETE",
+                     "delete target has traversal or a symlink ancestor")
             _require(relative.parts and relative.parts[0] != "privacy", "UNSAFE_DELETE",
                      "generic delete cannot target privacy records")
-            _require(candidate not in seen, "UNSAFE_DELETE", "delete target population overlaps")
-            seen.add(candidate)
+            _require(resolved not in seen, "UNSAFE_DELETE", "delete target population overlaps")
+            seen.add(resolved)
             _require(info.st_uid == os.geteuid() and not candidate.is_symlink(),
                      "UNSAFE_DELETE", "delete target is not same-user owned")
             if stat.S_ISREG(info.st_mode):
@@ -550,6 +633,154 @@ class PrivateVoiceStore:
                      "delete target must be an absolute Path")
             inspect(path)
         return tuple(logical)
+
+    @contextmanager
+    def _open_data_root(self) -> Iterator[tuple[Path, int]]:
+        """Bind deletion work to the canonical product-data directory."""
+
+        data_root = self.root.parent
+        descriptor = -1
+        try:
+            resolved = data_root.resolve(strict=True)
+            before = data_root.stat(follow_symlinks=False)
+            _require(data_root == resolved, "UNSAFE_DELETE",
+                     "product storage has traversal or a symlink ancestor")
+            descriptor = os.open(
+                data_root,
+                os.O_RDONLY
+                | getattr(os, "O_DIRECTORY", 0)
+                | getattr(os, "O_NOFOLLOW", 0)
+                | getattr(os, "O_CLOEXEC", 0),
+            )
+            opened = os.fstat(descriptor)
+            _require(
+                stat.S_ISDIR(opened.st_mode)
+                and opened.st_uid == os.geteuid()
+                and (opened.st_dev, opened.st_ino) == (before.st_dev, before.st_ino),
+                "UNSAFE_DELETE",
+                "product storage identity changed before deletion",
+            )
+        except (OSError, StoreError) as error:
+            if descriptor >= 0:
+                os.close(descriptor)
+            if isinstance(error, StoreError):
+                raise
+            raise StoreError(
+                "UNSAFE_DELETE", "product storage could not be opened safely"
+            ) from error
+        try:
+            yield data_root, descriptor
+        finally:
+            os.close(descriptor)
+
+    @staticmethod
+    def _relative_parts(data_root: Path, path: Path) -> tuple[str, ...]:
+        try:
+            relative = path.relative_to(data_root)
+        except ValueError as error:
+            raise StoreError(
+                "UNSAFE_DELETE", "delete move is outside product storage"
+            ) from error
+        _require(
+            bool(relative.parts)
+            and all(part not in {"", ".", ".."} and "/" not in part
+                    for part in relative.parts),
+            "UNSAFE_DELETE",
+            "delete move has an unsafe relative path",
+        )
+        return relative.parts
+
+    @staticmethod
+    def _open_directory_beneath(root_descriptor: int, parts: tuple[str, ...]) -> int:
+        """Open each directory component without following an ancestor symlink."""
+
+        descriptor = os.dup(root_descriptor)
+        try:
+            for part in parts:
+                child = os.open(
+                    part,
+                    os.O_RDONLY
+                    | getattr(os, "O_DIRECTORY", 0)
+                    | getattr(os, "O_NOFOLLOW", 0)
+                    | getattr(os, "O_CLOEXEC", 0),
+                    dir_fd=descriptor,
+                )
+                os.close(descriptor)
+                descriptor = child
+                info = os.fstat(descriptor)
+                _require(
+                    stat.S_ISDIR(info.st_mode) and info.st_uid == os.geteuid(),
+                    "UNSAFE_DELETE",
+                    "delete move crosses an unsafe directory",
+                )
+            return descriptor
+        except (OSError, StoreError) as error:
+            os.close(descriptor)
+            if isinstance(error, StoreError):
+                raise
+            raise StoreError(
+                "UNSAFE_DELETE", "delete move crosses an unavailable directory"
+            ) from error
+
+    def _replace_beneath(
+        self,
+        *,
+        data_root: Path,
+        root_descriptor: int,
+        source: Path,
+        target: Path,
+    ) -> None:
+        source_parts = self._relative_parts(data_root, source)
+        target_parts = self._relative_parts(data_root, target)
+        source_parent = self._open_directory_beneath(
+            root_descriptor, source_parts[:-1]
+        )
+        target_parent = -1
+        try:
+            target_parent = self._open_directory_beneath(
+                root_descriptor, target_parts[:-1]
+            )
+            os.replace(
+                source_parts[-1],
+                target_parts[-1],
+                src_dir_fd=source_parent,
+                dst_dir_fd=target_parent,
+            )
+        except OSError as error:
+            raise StoreError("STORE_WRITE", "anchored delete move failed") from error
+        finally:
+            os.close(source_parent)
+            if target_parent >= 0:
+                os.close(target_parent)
+
+    def _fsync_parent_beneath(
+        self,
+        *,
+        data_root: Path,
+        root_descriptor: int,
+        path: Path,
+    ) -> None:
+        parts = self._relative_parts(data_root, path)
+        descriptor = self._open_directory_beneath(root_descriptor, parts[:-1])
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+
+    def _remove_batch_beneath(
+        self,
+        *,
+        data_root: Path,
+        root_descriptor: int,
+        batch: Path,
+    ) -> None:
+        parts = self._relative_parts(data_root, batch)
+        parent = self._open_directory_beneath(root_descriptor, parts[:-1])
+        try:
+            shutil.rmtree(parts[-1], dir_fd=parent)
+            os.fsync(parent)
+        finally:
+            os.close(parent)
 
     def _recovery_records(
         self,
@@ -651,46 +882,87 @@ class PrivateVoiceStore:
         archived = self._recovery_records(records)
         _canonical(metadata)
         preview = moved_population + tuple(name for name, _value in archived)
-        data_root = self.root.parent
         batch_id = f"{safe_kind}-{safe_id}-{uuid.uuid4().hex}"
         batch = self.root / "trash" / batch_id
-        _private_directory(batch)
         moved: list[tuple[Path, Path]] = []
-        try:
-            for source in roots:
-                relative = source.relative_to(data_root)
-                target = batch / relative
-                _private_directory(target.parent)
-                os.replace(source, target)
-                moved.append((source, target))
-                _fsync_directory(source.parent)
-            for logical, value in archived:
-                destination = batch / "records" / Path(*PurePosixPath(logical).parts)
-                _private_directory(destination.parent)
-                self._atomic_record(destination, value)
-            self._atomic_record(batch / "delete-receipt.json", {
-                "schema": "kilix.voicebox.recoverable-delete/candidate-v1",
-                "batch_id": batch_id,
-                "kind": safe_kind,
-                "object_id": safe_id,
-                "moved": list(moved_population),
-                "archived": [name for name, _value in archived],
-                "metadata": metadata,
-                "recorded_at": _timestamp(),
-            })
-            _fsync_directory(batch)
-            return {"batch_id": batch_id, "files": list(preview), "count": len(preview)}
-        except (OSError, StoreError) as error:
-            for source, target in reversed(moved):
+        with self._open_data_root() as (data_root, root_descriptor):
+            _private_directory(batch)
+            try:
+                for source in roots:
+                    relative = source.relative_to(data_root)
+                    target = batch / relative
+                    _private_directory(target.parent)
+                    self._replace_beneath(
+                        data_root=data_root,
+                        root_descriptor=root_descriptor,
+                        source=source,
+                        target=target,
+                    )
+                    moved.append((source, target))
+                    self._fsync_parent_beneath(
+                        data_root=data_root,
+                        root_descriptor=root_descriptor,
+                        path=source,
+                    )
+                for logical, value in archived:
+                    destination = batch / "records" / Path(*PurePosixPath(logical).parts)
+                    _private_directory(destination.parent)
+                    self._atomic_record(destination, value)
+                self._atomic_record(batch / "delete-receipt.json", {
+                    "schema": "kilix.voicebox.recoverable-delete/candidate-v1",
+                    "batch_id": batch_id,
+                    "kind": safe_kind,
+                    "object_id": safe_id,
+                    "moved": list(moved_population),
+                    "archived": [name for name, _value in archived],
+                    "metadata": metadata,
+                    "recorded_at": _timestamp(),
+                })
+                _fsync_directory(batch)
+                return {
+                    "batch_id": batch_id,
+                    "files": list(preview),
+                    "count": len(preview),
+                }
+            except (OSError, StoreError) as error:
+                rollback_failures = 0
+                for source, target in reversed(moved):
+                    try:
+                        self._replace_beneath(
+                            data_root=data_root,
+                            root_descriptor=root_descriptor,
+                            source=target,
+                            target=source,
+                        )
+                    except (OSError, StoreError):
+                        rollback_failures += 1
+                if rollback_failures:
+                    try:
+                        self._atomic_record(batch / "rollback-failure.json", {
+                            "schema": "kilix.voicebox.rollback-failure/candidate-v1",
+                            "batch_id": batch_id,
+                            "failed_restores": rollback_failures,
+                            "moved_count": len(moved),
+                            "recorded_at": _timestamp(),
+                        })
+                        _fsync_directory(batch)
+                    except (OSError, StoreError):
+                        pass
+                    raise StoreError(
+                        "ROLLBACK_INCOMPLETE",
+                        "recoverable delete rollback was incomplete; recovery batch preserved",
+                    ) from error
                 try:
-                    source.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-                    os.replace(target, source)
-                except OSError:
+                    self._remove_batch_beneath(
+                        data_root=data_root,
+                        root_descriptor=root_descriptor,
+                        batch=batch,
+                    )
+                except (OSError, StoreError):
                     pass
-            shutil.rmtree(batch, ignore_errors=True)
-            if isinstance(error, StoreError):
-                raise
-            raise StoreError("STORE_WRITE", "recoverable delete failed") from error
+                if isinstance(error, StoreError):
+                    raise
+                raise StoreError("STORE_WRITE", "recoverable delete failed") from error
 
     def trash_generation(
         self,
@@ -704,43 +976,87 @@ class PrivateVoiceStore:
         identifier = _identifier(generation_id, "generation_id")
         batch_id = f"generation-{identifier}-{uuid.uuid4().hex}"
         batch = self.root / "trash" / batch_id
-        _private_directory(batch)
-        moved: list[str] = []
-        try:
-            for relative in names:
-                source = self.root / relative
-                target = batch / relative
-                _private_directory(target.parent)
-                os.replace(source, target)
-                moved.append(relative)
-            for logical, value in archived:
-                destination = batch / "records" / Path(*PurePosixPath(logical).parts)
-                _private_directory(destination.parent)
-                self._atomic_record(destination, value)
-            self._atomic_record(batch / "delete-receipt.json", {
-                "schema": "kilix.voicebox.recoverable-delete/candidate-v1",
-                "batch_id": batch_id,
-                "kind": "generation",
-                "object_id": identifier,
-                "moved": list(names),
-                "archived": [name for name, _value in archived],
-                "recorded_at": _timestamp(),
-            })
-            _fsync_directory(self.generation_root)
-            _fsync_directory(self.consent_root)
-            _fsync_directory(batch)
-            population = list(names) + [name for name, _value in archived]
-            return {"batch_id": batch_id, "files": population, "count": len(population)}
-        except (OSError, StoreError) as error:
-            for relative in reversed(moved):
+        moved: list[tuple[Path, Path]] = []
+        with self._open_data_root() as (data_root, root_descriptor):
+            _private_directory(batch)
+            try:
+                for relative in names:
+                    source = self.root / relative
+                    target = batch / relative
+                    _private_directory(target.parent)
+                    self._replace_beneath(
+                        data_root=data_root,
+                        root_descriptor=root_descriptor,
+                        source=source,
+                        target=target,
+                    )
+                    moved.append((source, target))
+                    self._fsync_parent_beneath(
+                        data_root=data_root,
+                        root_descriptor=root_descriptor,
+                        path=source,
+                    )
+                for logical, value in archived:
+                    destination = batch / "records" / Path(*PurePosixPath(logical).parts)
+                    _private_directory(destination.parent)
+                    self._atomic_record(destination, value)
+                self._atomic_record(batch / "delete-receipt.json", {
+                    "schema": "kilix.voicebox.recoverable-delete/candidate-v1",
+                    "batch_id": batch_id,
+                    "kind": "generation",
+                    "object_id": identifier,
+                    "moved": list(names),
+                    "archived": [name for name, _value in archived],
+                    "recorded_at": _timestamp(),
+                })
+                _fsync_directory(self.generation_root)
+                _fsync_directory(self.consent_root)
+                _fsync_directory(batch)
+                population = list(names) + [name for name, _value in archived]
+                return {
+                    "batch_id": batch_id,
+                    "files": population,
+                    "count": len(population),
+                }
+            except (OSError, StoreError) as error:
+                rollback_failures = 0
+                for source, target in reversed(moved):
+                    try:
+                        self._replace_beneath(
+                            data_root=data_root,
+                            root_descriptor=root_descriptor,
+                            source=target,
+                            target=source,
+                        )
+                    except (OSError, StoreError):
+                        rollback_failures += 1
+                if rollback_failures:
+                    try:
+                        self._atomic_record(batch / "rollback-failure.json", {
+                            "schema": "kilix.voicebox.rollback-failure/candidate-v1",
+                            "batch_id": batch_id,
+                            "failed_restores": rollback_failures,
+                            "moved_count": len(moved),
+                            "recorded_at": _timestamp(),
+                        })
+                        _fsync_directory(batch)
+                    except (OSError, StoreError):
+                        pass
+                    raise StoreError(
+                        "ROLLBACK_INCOMPLETE",
+                        "generation rollback was incomplete; recovery batch preserved",
+                    ) from error
                 try:
-                    os.replace(batch / relative, self.root / relative)
-                except OSError:
+                    self._remove_batch_beneath(
+                        data_root=data_root,
+                        root_descriptor=root_descriptor,
+                        batch=batch,
+                    )
+                except (OSError, StoreError):
                     pass
-            shutil.rmtree(batch, ignore_errors=True)
-            if isinstance(error, StoreError):
-                raise
-            raise StoreError("TRASH_FAILED", "recoverable trash move failed") from error
+                if isinstance(error, StoreError):
+                    raise
+                raise StoreError("TRASH_FAILED", "recoverable trash move failed") from error
 
 
 def default_voice_store() -> PrivateVoiceStore:

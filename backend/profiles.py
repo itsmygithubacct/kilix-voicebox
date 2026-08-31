@@ -174,6 +174,13 @@ async def add_profile_sample(
     profile = db.query(DBVoiceProfile).filter_by(id=profile_id).first()
     if not profile:
         raise ValueError(f"Profile {profile_id} not found")
+
+    existing = db.query(DBProfileSample.id).filter_by(profile_id=profile_id).first()
+    if existing is not None:
+        raise ValueError(
+            "Exactly one source sample is allowed until the provider protocol "
+            "defines bounded multi-sample selection"
+        )
     
     # Validate audio
     is_valid, error_msg = validate_reference_audio(audio_path)
@@ -446,7 +453,12 @@ async def create_voice_prompt_for_profile(
         A product-side descriptor. It contains no model tensors or pickle.
     """
     # Get all samples for profile
-    samples = db.query(DBProfileSample).filter_by(profile_id=profile_id).all()
+    samples = (
+        db.query(DBProfileSample)
+        .filter_by(profile_id=profile_id)
+        .limit(2)
+        .all()
+    )
 
     if not samples:
         raise ValueError(f"No samples found for profile {profile_id}")

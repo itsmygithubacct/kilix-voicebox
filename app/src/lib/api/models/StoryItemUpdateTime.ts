@@ -6,6 +6,6 @@
  * Request model for updating a story item's timecode.
  */
 export type StoryItemUpdateTime = {
-    generation_id: string;
+    item_id: string;
     start_time_ms: number;
 };

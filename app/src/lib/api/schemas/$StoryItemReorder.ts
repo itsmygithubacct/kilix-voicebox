@@ -5,7 +5,7 @@
 export const $StoryItemReorder = {
     description: `Request model for reordering story items.`,
     properties: {
-        generation_ids: {
+        item_ids: {
             type: 'array',
             contains: {
                 type: 'string',

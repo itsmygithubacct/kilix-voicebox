@@ -5,7 +5,7 @@
 export const $StoryItemUpdateTime = {
     description: `Request model for updating a story item's timecode.`,
     properties: {
-        generation_id: {
+        item_id: {
             type: 'string',
             isRequired: true,
         },

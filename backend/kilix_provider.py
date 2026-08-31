@@ -354,6 +354,9 @@ class ProviderClient:
                     _close_all(descriptors)
                     raise ProviderError("INVALID_RESPONSE")
                 kind = event.get("type")
+                if type(kind) is not str:
+                    _close_all(descriptors)
+                    raise ProviderError("INVALID_RESPONSE")
                 if kind == "error":
                     _close_all(descriptors)
                     error = event.get("error")

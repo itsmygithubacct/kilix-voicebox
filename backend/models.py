@@ -7,6 +7,10 @@ from typing import Optional, List
 from datetime import datetime
 
 
+MAX_STORY_ITEMS = 4_096
+MAX_STORY_TIMELINE_MS = 900_000
+
+
 class VoiceProfileCreate(BaseModel):
     """Request model for creating a voice profile."""
     name: str = Field(..., min_length=1, max_length=100)
@@ -258,30 +262,34 @@ class StoryDetailResponse(BaseModel):
 class StoryItemCreate(BaseModel):
     """Request model for adding a generation to a story."""
     generation_id: str
-    start_time_ms: Optional[int] = None  # If not provided, will be calculated automatically
-    track: Optional[int] = 0  # Track number (0 = main track)
+    start_time_ms: Optional[int] = Field(
+        default=None, ge=0, le=MAX_STORY_TIMELINE_MS
+    )
+    track: Optional[int] = Field(default=0, ge=0, le=255)
 
 
 class StoryItemUpdateTime(BaseModel):
     """Request model for updating a story item's timecode."""
-    generation_id: str
-    start_time_ms: int = Field(..., ge=0)
+    item_id: str
+    start_time_ms: int = Field(..., ge=0, le=MAX_STORY_TIMELINE_MS)
 
 
 class StoryItemBatchUpdate(BaseModel):
     """Request model for batch updating story item timecodes."""
-    updates: List[StoryItemUpdateTime]
+    updates: List[StoryItemUpdateTime] = Field(
+        ..., min_length=1, max_length=MAX_STORY_ITEMS
+    )
 
 
 class StoryItemReorder(BaseModel):
     """Request model for reordering story items."""
-    generation_ids: List[str] = Field(..., min_length=1)
+    item_ids: List[str] = Field(..., min_length=1, max_length=MAX_STORY_ITEMS)
 
 
 class StoryItemMove(BaseModel):
     """Request model for moving a story item (position and/or track)."""
-    start_time_ms: int = Field(..., ge=0)
-    track: int = 0
+    start_time_ms: int = Field(..., ge=0, le=MAX_STORY_TIMELINE_MS)
+    track: int = Field(default=0, ge=0, le=255)
 
 
 class StoryItemTrim(BaseModel):
@@ -292,4 +300,4 @@ class StoryItemTrim(BaseModel):
 
 class StoryItemSplit(BaseModel):
     """Request model for splitting a story item."""
-    split_time_ms: int = Field(..., ge=0)  # Time within the clip to split at (relative to clip start)
+    split_time_ms: int = Field(..., gt=0, le=MAX_STORY_TIMELINE_MS)

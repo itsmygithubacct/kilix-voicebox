@@ -6,5 +6,5 @@
  * Request model for reordering story items.
  */
 export type StoryItemReorder = {
-    generation_ids: Array<string>;
+    item_ids: Array<string>;
 };

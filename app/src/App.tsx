@@ -35,12 +35,15 @@ const LOADING_MESSAGES = [
 function App() {
   const platform = usePlatform();
   const [serverReady, setServerReady] = useState(false);
+  const [serverStartError, setServerStartError] = useState<string | null>(null);
+  const [serverStartAttempt, setServerStartAttempt] = useState(0);
   const [loadingMessageIndex, setLoadingMessageIndex] = useState(0);
   const serverStartingRef = useRef(false);
 
   // Setup lifecycle callbacks
   useEffect(() => {
     platform.lifecycle.onServerReady = () => {
+      setServerStartError(null);
       setServerReady(true);
     };
     // Empty dependency array - platform is stable from context, only run once
@@ -49,6 +52,7 @@ function App() {
 
   // Setup window close handler and auto-start server when running in Tauri (production only)
   useEffect(() => {
+    void serverStartAttempt;
     if (!platform.metadata.isTauri) {
       setServerReady(true); // Web assumes server is running
       return;
@@ -68,6 +72,7 @@ function App() {
     }
 
     serverStartingRef.current = true;
+    setServerStartError(null);
     console.log('VOICEBOX_SIDECAR_STARTING');
 
     platform.lifecycle
@@ -79,6 +84,7 @@ function App() {
       })
       .catch(() => {
         serverStartingRef.current = false;
+        setServerStartError('VOICEBOX_SIDECAR_START_FAILED');
       });
 
     // Cleanup: stop server on actual unmount (not StrictMode remount)
@@ -88,7 +94,7 @@ function App() {
     };
     // Empty dependency array - platform is stable from context, only run once
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [platform.metadata.isTauri, platform.lifecycle]);
+  }, [platform.metadata.isTauri, platform.lifecycle, serverStartAttempt]);
 
   // Cycle through loading messages every 3 seconds
   useEffect(() => {
@@ -124,15 +130,32 @@ function App() {
               className="w-48 h-48 object-contain animate-fade-in-scale relative z-10"
             />
           </div>
-          <div className="animate-fade-in-delayed">
-            <ShinyText
-              text={LOADING_MESSAGES[loadingMessageIndex]}
-              className="text-lg font-medium text-muted-foreground"
-              speed={2}
-              color="hsl(var(--muted-foreground))"
-              shineColor="hsl(var(--foreground))"
-            />
-          </div>
+          {serverStartError ? (
+            <div className="space-y-3" role="alert">
+              <p className="text-lg font-medium">Local Voicebox service could not start.</p>
+              <p className="font-mono text-sm text-muted-foreground">{serverStartError}</p>
+              <button
+                type="button"
+                className="rounded-md border px-4 py-2 text-sm hover:bg-muted"
+                onClick={() => {
+                  serverStartingRef.current = false;
+                  setServerStartAttempt((attempt) => attempt + 1);
+                }}
+              >
+                Retry
+              </button>
+            </div>
+          ) : (
+            <div className="animate-fade-in-delayed">
+              <ShinyText
+                text={LOADING_MESSAGES[loadingMessageIndex]}
+                className="text-lg font-medium text-muted-foreground"
+                speed={2}
+                color="hsl(var(--muted-foreground))"
+                shineColor="hsl(var(--foreground))"
+              />
+            </div>
+          )}
         </div>
       </div>
     );

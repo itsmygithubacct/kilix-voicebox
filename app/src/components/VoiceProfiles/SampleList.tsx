@@ -319,20 +319,21 @@ export function SampleList({ profileId }: SampleListProps) {
         </div>
       )}
 
-      <Button
-        type="button"
-        variant="outline"
-        className="w-full"
-        onClick={() => setUploadOpen(true)}
-      >
-        <Plus className="mr-2 h-4 w-4" />
-        Add Sample
-      </Button>
+      {(!samples || samples.length === 0) && (
+        <Button
+          type="button"
+          variant="outline"
+          className="w-full"
+          onClick={() => setUploadOpen(true)}
+        >
+          <Plus className="mr-2 h-4 w-4" />
+          Add Sample
+        </Button>
+      )}
 
       <p className="text-xs text-muted-foreground text-center px-2">
-        Note: A single 30-second sample is the sweet spot. Quality may decrease with multiple
-        samples. In a future update samples might be interchangeable and tagged for varying styles
-        of the same voice.
+        Each profile uses exactly one consented sample of up to 30 seconds. Delete the current
+        sample before selecting a replacement.
       </p>
 
       <SampleUpload profileId={profileId} open={uploadOpen} onOpenChange={setUploadOpen} />

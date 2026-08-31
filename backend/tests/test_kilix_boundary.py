@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import fcntl
 import hashlib
 import io
 import json
@@ -21,7 +22,7 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend import export_import, models, stories
+from backend import export_import, models, profiles, stories
 from backend.database import (
     Base,
     Generation as DBGeneration,
@@ -242,6 +243,41 @@ class ClientTests(unittest.TestCase):
                 listener.close()
             self.assertFalse(worker.is_alive())
 
+    def test_untyped_provider_event_is_stably_refused(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            runtime = Path(directory)
+            os.chmod(runtime, 0o700)
+            endpoint = runtime / QWEN_ENDPOINT.socket_name
+            listener = socket.socket(socket.AF_UNIX, socket.SOCK_SEQPACKET)
+            listener.bind(str(endpoint))
+            os.chmod(endpoint, 0o600)
+            listener.listen(1)
+
+            def serve() -> None:
+                channel, _address = listener.accept()
+                try:
+                    value, _descriptors = receive_message(channel)
+                    send_message(channel, {
+                        "schema": QWEN_SCHEMA,
+                        "type": [],
+                        "request_id": value["request_id"],
+                    })
+                finally:
+                    channel.close()
+
+            worker = threading.Thread(target=serve)
+            worker.start()
+            try:
+                with self.assertRaises(ProviderError) as caught:
+                    ProviderClient(QWEN_ENDPOINT, runtime, timeout=2).request(
+                        request(QWEN_SCHEMA)
+                    )
+                self.assertEqual(caught.exception.code, "INVALID_RESPONSE")
+            finally:
+                worker.join(timeout=2)
+                listener.close()
+            self.assertFalse(worker.is_alive())
+
     def test_request_deadline_is_cumulative_and_redacted(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             runtime = Path(directory)
@@ -380,6 +416,189 @@ class StoreTests(unittest.TestCase):
             with self.assertRaises(StoreError) as caught:
                 store.commit_generation(source=io.BytesIO(audio), provenance=provenance)
             self.assertEqual(caught.exception.code, "CONSENT_NOT_FOUND")
+
+    def test_tampered_consent_is_recomputed_before_generation_commit(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = PrivateVoiceStore(Path(directory) / "voicebox")
+            sample = Path(directory) / "sample.wav"
+            sample.write_bytes(wav_bytes())
+            consent = store.attest_sample(
+                profile_id="profile-1", sample_path=sample, asserted_by_user=True
+            )
+            record = store.consent_root / f"{consent.sha256}.json"
+            stored = json.loads(record.read_text())
+            stored["consent"]["asserted_by_peer"] = False
+            record.write_text(
+                json.dumps(stored, separators=(",", ":"), sort_keys=True) + "\n"
+            )
+            audio = b"RIFF" + b"\x01" * 64
+            provenance = GenerationProvenance.create(
+                generation_id="generation-1", job_id="job-1",
+                provider="kilix-qwen-tts", model_id="model-not-selected",
+                model_revision="revision-not-selected",
+                output_sha256=hashlib.sha256(audio).hexdigest(),
+                output_bytes=len(audio), source_sha256=consent.source_sha256,
+                consent_sha256=consent.sha256,
+            )
+            with self.assertRaises(StoreError) as caught:
+                store.commit_generation(
+                    source=io.BytesIO(audio), provenance=provenance
+                )
+            self.assertEqual(caught.exception.code, "INVALID_RECORD")
+
+    def test_delete_traversal_is_refused_before_move(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            data = parent / "data"
+            (data / "profiles").mkdir(mode=0o700, parents=True)
+            outside = parent / "outside.txt"
+            outside.write_text("preserve")
+            store = PrivateVoiceStore(data / "privacy")
+            traversal = data / "profiles" / ".." / ".." / outside.name
+            with self.assertRaises(StoreError) as caught:
+                store.preview_owned_delete((traversal,))
+            self.assertEqual(caught.exception.code, "UNSAFE_DELETE")
+            self.assertEqual(outside.read_text(), "preserve")
+
+    def test_delete_ancestor_swap_is_refused_before_move(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory)
+            data = parent / "data"
+            profiles = data / "profiles"
+            profile = profiles / "profile-1"
+            profile.mkdir(mode=0o700, parents=True)
+            (profile / "sample.wav").write_bytes(wav_bytes(240))
+            outside = parent / "outside"
+            victim = outside / "profile-1"
+            victim.mkdir(mode=0o700, parents=True)
+            (victim / "preserve.wav").write_bytes(b"preserve")
+            store = PrivateVoiceStore(data / "privacy")
+            real_population = store._owned_path_population
+
+            def inspect_then_swap(paths):
+                population = real_population(paths)
+                profiles.rename(data / "profiles-original")
+                profiles.symlink_to(outside, target_is_directory=True)
+                return population
+
+            with (
+                patch.object(
+                    store, "_owned_path_population", side_effect=inspect_then_swap,
+                ),
+                self.assertRaises(StoreError) as caught,
+            ):
+                store.trash_owned_paths(
+                    kind="profile", object_id="profile-1", paths=(profile,), metadata={}
+                )
+            self.assertEqual(caught.exception.code, "UNSAFE_DELETE")
+            self.assertEqual((victim / "preserve.wav").read_bytes(), b"preserve")
+            self.assertTrue(
+                (data / "profiles-original" / "profile-1" / "sample.wav").is_file()
+            )
+
+    def test_incomplete_generic_rollback_preserves_recovery_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            data = Path(directory) / "data"
+            profile = data / "profiles" / "profile-1"
+            profile.mkdir(mode=0o700, parents=True)
+            (profile / "sample.wav").write_bytes(wav_bytes(240))
+            store = PrivateVoiceStore(data / "privacy")
+            real_replace = os.replace
+            real_atomic_record = store._atomic_record
+
+            move_count = 0
+
+            def replace_with_failed_restore(
+                source, destination, *, src_dir_fd=None, dst_dir_fd=None,
+            ):
+                nonlocal move_count
+                move_count += 1
+                if move_count > 1:
+                    raise OSError("injected restore failure")
+                return real_replace(
+                    source,
+                    destination,
+                    src_dir_fd=src_dir_fd,
+                    dst_dir_fd=dst_dir_fd,
+                )
+
+            def record_with_failed_receipt(destination, value):
+                if Path(destination).name == "delete-receipt.json":
+                    raise StoreError("STORE_WRITE", "injected receipt failure")
+                return real_atomic_record(destination, value)
+
+            with (
+                patch.object(
+                    store, "_atomic_record", side_effect=record_with_failed_receipt,
+                ),
+                patch("backend.private_store.os.replace", side_effect=replace_with_failed_restore),
+                self.assertRaises(StoreError) as caught,
+            ):
+                store.trash_owned_paths(
+                    kind="profile", object_id="profile-1", paths=(profile,), metadata={}
+                )
+            self.assertEqual(caught.exception.code, "ROLLBACK_INCOMPLETE")
+            batches = tuple((store.root / "trash").iterdir())
+            self.assertEqual(len(batches), 1)
+            self.assertFalse(profile.exists())
+            self.assertTrue((batches[0] / "profiles" / "profile-1" / "sample.wav").is_file())
+            self.assertTrue((batches[0] / "rollback-failure.json").is_file())
+
+    def test_incomplete_generation_rollback_preserves_recovery_batch(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            store = PrivateVoiceStore(Path(directory) / "voicebox")
+            sample = Path(directory) / "sample.wav"
+            sample.write_bytes(wav_bytes())
+            consent = store.attest_sample(
+                profile_id="profile-1", sample_path=sample, asserted_by_user=True
+            )
+            audio = b"RIFF" + b"\x01" * 64
+            provenance = GenerationProvenance.create(
+                generation_id="generation-1", job_id="job-1",
+                provider="kilix-qwen-tts", model_id="model-not-selected",
+                model_revision="revision-not-selected",
+                output_sha256=hashlib.sha256(audio).hexdigest(),
+                output_bytes=len(audio), source_sha256=consent.source_sha256,
+                consent_sha256=consent.sha256,
+            )
+            store.commit_generation(source=io.BytesIO(audio), provenance=provenance)
+            real_replace = os.replace
+            real_atomic_record = store._atomic_record
+
+            move_count = 0
+
+            def replace_with_failed_restore(
+                source, destination, *, src_dir_fd=None, dst_dir_fd=None,
+            ):
+                nonlocal move_count
+                move_count += 1
+                if move_count > 3:
+                    raise OSError("injected restore failure")
+                return real_replace(
+                    source,
+                    destination,
+                    src_dir_fd=src_dir_fd,
+                    dst_dir_fd=dst_dir_fd,
+                )
+
+            def record_with_failed_receipt(destination, value):
+                if Path(destination).name == "delete-receipt.json":
+                    raise StoreError("STORE_WRITE", "injected receipt failure")
+                return real_atomic_record(destination, value)
+
+            with (
+                patch.object(
+                    store, "_atomic_record", side_effect=record_with_failed_receipt,
+                ),
+                patch("backend.private_store.os.replace", side_effect=replace_with_failed_restore),
+                self.assertRaises(StoreError) as caught,
+            ):
+                store.trash_generation("generation-1")
+            self.assertEqual(caught.exception.code, "ROLLBACK_INCOMPLETE")
+            batches = tuple((store.root / "trash").iterdir())
+            self.assertEqual(len(batches), 1)
+            self.assertTrue((batches[0] / "rollback-failure.json").is_file())
+            self.assertTrue((batches[0] / "generations" / "generation-1.wav").is_file())
 
     def test_generic_delete_has_exact_preview_and_private_receipt(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
@@ -567,6 +786,151 @@ class StoryRecoveryTests(unittest.TestCase):
             db.close()
 
 
+class StoryBoundaryTests(unittest.TestCase):
+    @staticmethod
+    def _session():
+        engine = create_engine("sqlite:///:memory:")
+        Base.metadata.create_all(engine)
+        return sessionmaker(bind=engine)()
+
+    @staticmethod
+    def _story_fixture(db) -> None:
+        db.add(DBVoiceProfile(
+            id="profile-1", name="Voice", description=None, language="en"
+        ))
+        db.add(DBGeneration(
+            id="generation-1", profile_id="profile-1", text="hello",
+            language="en", audio_path="/private/generation-1.wav",
+            duration=1.0, seed=7, instruct=None,
+        ))
+        db.add(DBStory(id="story-1", name="Story", description=None))
+        db.add(DBStoryItem(
+            id="item-1", story_id="story-1", generation_id="generation-1",
+            start_time_ms=0, track=0, trim_start_ms=0, trim_end_ms=0,
+        ))
+        db.commit()
+
+    def test_split_duplicate_reorder_and_update_use_item_ids(self) -> None:
+        db = self._session()
+        try:
+            self._story_fixture(db)
+            split = asyncio.run(stories.split_story_item(
+                "story-1", "item-1", models.StoryItemSplit(split_time_ms=400), db
+            ))
+            self.assertIsNotNone(split)
+            assert split is not None
+            duplicate = asyncio.run(stories.duplicate_story_item(
+                "story-1", split[0].id, db
+            ))
+            self.assertIsNotNone(duplicate)
+            assert duplicate is not None
+            item_ids = [split[0].id, split[1].id, duplicate.id]
+            self.assertEqual(len(set(item_ids)), 3)
+            self.assertEqual(
+                {item.generation_id for item in (*split, duplicate)},
+                {"generation-1"},
+            )
+            requested = list(reversed(item_ids))
+            reordered = asyncio.run(stories.reorder_story_items(
+                "story-1", requested, db
+            ))
+            self.assertIsNotNone(reordered)
+            assert reordered is not None
+            self.assertEqual([item.id for item in reordered], requested)
+            target = item_ids[0]
+            updated = asyncio.run(stories.update_story_item_times(
+                "story-1",
+                models.StoryItemBatchUpdate(updates=[
+                    models.StoryItemUpdateTime(item_id=target, start_time_ms=123)
+                ]),
+                db,
+            ))
+            self.assertTrue(updated)
+            self.assertEqual(db.query(DBStoryItem).filter_by(id=target).one().start_time_ms, 123)
+        finally:
+            db.close()
+
+    def test_second_profile_sample_is_refused_before_decode(self) -> None:
+        db = self._session()
+        try:
+            db.add(DBVoiceProfile(
+                id="profile-1", name="Voice", description=None, language="en"
+            ))
+            db.add(DBProfileSample(
+                id="sample-1", profile_id="profile-1",
+                audio_path="/private/sample.wav", reference_text="sample",
+            ))
+            db.commit()
+            with (
+                patch("backend.profiles.validate_reference_audio") as validate,
+                self.assertRaisesRegex(ValueError, "Exactly one source sample"),
+            ):
+                asyncio.run(profiles.add_profile_sample(
+                    "profile-1", "/unreadable.wav", "second", db
+                ))
+            validate.assert_not_called()
+            self.assertEqual(
+                db.query(DBProfileSample).filter_by(profile_id="profile-1").count(), 1
+            )
+        finally:
+            db.close()
+
+    def test_three_timecode_request_models_are_bounded(self) -> None:
+        extreme = models.MAX_STORY_TIMELINE_MS + 1
+        for value in (-1, extreme):
+            constructors = (
+                lambda: models.StoryItemCreate(
+                    generation_id="generation-1", start_time_ms=value
+                ),
+                lambda: models.StoryItemUpdateTime(
+                    item_id="item-1", start_time_ms=value
+                ),
+                lambda: models.StoryItemMove(start_time_ms=value),
+            )
+            for constructor in constructors:
+                with self.subTest(value=value, constructor=constructor):
+                    with self.assertRaises(ValueError):
+                        constructor()
+
+    def test_persisted_extreme_timecode_refuses_before_allocation(self) -> None:
+        db = self._session()
+        try:
+            self._story_fixture(db)
+            item = db.query(DBStoryItem).filter_by(id="item-1").one()
+            item.start_time_ms = models.MAX_STORY_TIMELINE_MS
+            db.commit()
+            with (
+                patch("backend.stories.np.zeros") as allocate,
+                self.assertRaisesRegex(ValueError, "STORY_EXPORT_BOUND"),
+            ):
+                asyncio.run(stories.export_story_audio("story-1", db))
+            allocate.assert_not_called()
+        finally:
+            db.close()
+
+
+class DesktopPolicyTests(unittest.TestCase):
+    def test_production_csp_admits_fixed_loopback_images_and_media(self) -> None:
+        config_path = (
+            Path(__file__).resolve().parents[2]
+            / "tauri" / "src-tauri" / "tauri.conf.json"
+        )
+        csp = json.loads(config_path.read_text())["app"]["security"]["csp"]
+        directives = {
+            part.strip().split(maxsplit=1)[0]: part.strip()
+            for part in csp.split(";") if part.strip()
+        }
+        for directive in ("img-src", "media-src"):
+            self.assertIn("http://127.0.0.1:17493", directives[directive])
+
+    def test_sidecar_start_failure_has_error_and_retry_ui(self) -> None:
+        app_source = (
+            Path(__file__).resolve().parents[2] / "app" / "src" / "App.tsx"
+        ).read_text()
+        self.assertIn("VOICEBOX_SIDECAR_START_FAILED", app_source)
+        self.assertIn("Retry", app_source)
+
+
 class GenerationRouteTests(unittest.TestCase):
     def test_generated_seed_is_sent_and_persisted(self) -> None:
         now = datetime.now()
@@ -728,6 +1092,12 @@ class OrchestratorTests(unittest.TestCase):
                 output_file = None
                 try:
                     self.assertEqual(len(descriptors), 1)
+                    self.assertEqual(
+                        fcntl.fcntl(descriptors[0], fcntl.F_GETFL) & os.O_ACCMODE,
+                        os.O_RDONLY,
+                    )
+                    with self.assertRaises(OSError):
+                        os.write(descriptors[0], b"mutate")
                     prompt = value["args"]["prompt_audio"]
                     pcm = b""
                     while True:

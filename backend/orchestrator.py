@@ -68,32 +68,35 @@ def _prompt_pcm(sample_path: Path) -> tuple[bytes, str, int, int]:
 
 
 def _memory_descriptor(payload: bytes, private_directory: Path) -> int:
-    descriptor = -1
+    writer = -1
+    reader = -1
+    name: str | None = None
     try:
-        if hasattr(os, "O_TMPFILE"):
-            try:
-                descriptor = os.open(
-                    private_directory,
-                    os.O_RDWR | os.O_TMPFILE | getattr(os, "O_CLOEXEC", 0),
-                    0o600,
-                )
-            except OSError:
-                descriptor = -1
-        if descriptor < 0:
-            descriptor, name = tempfile.mkstemp(
-                prefix=".provider-prompt-", dir=private_directory
-            )
-            os.unlink(name)
+        writer, name = tempfile.mkstemp(
+            prefix=".provider-prompt-", dir=private_directory
+        )
         view = memoryview(payload)
         while view:
-            written = os.write(descriptor, view)
+            written = os.write(writer, view)
             _require(written > 0, "INPUT_READ")
             view = view[written:]
-        os.lseek(descriptor, 0, os.SEEK_SET)
-        return descriptor
+        os.fsync(writer)
+        reader = os.open(
+            name,
+            os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+        )
+        os.unlink(name)
+        name = None
+        os.close(writer)
+        writer = -1
+        return reader
     except Exception:
-        if descriptor >= 0:
-            os.close(descriptor)
+        if reader >= 0:
+            os.close(reader)
+        if writer >= 0:
+            os.close(writer)
+        if name is not None:
+            Path(name).unlink(missing_ok=True)
         raise
 
 

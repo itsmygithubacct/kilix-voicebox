@@ -108,7 +108,7 @@ export function StoryContent() {
       const itemEnd = item.start_time_ms + item.duration * 1000;
       return currentTimeMs >= itemStart && currentTimeMs < itemEnd;
     });
-    return playingItem?.generation_id ?? null;
+    return playingItem?.id ?? null;
   }, [isPlaying, playbackStoryId, story?.id, sortedItems, currentTimeMs]);
 
   // Auto-scroll to the currently playing item
@@ -156,20 +156,20 @@ export function StoryContent() {
 
     if (!story || !over || active.id === over.id) return;
 
-    const oldIndex = sortedItems.findIndex((item) => item.generation_id === active.id);
-    const newIndex = sortedItems.findIndex((item) => item.generation_id === over.id);
+    const oldIndex = sortedItems.findIndex((item) => item.id === active.id);
+    const newIndex = sortedItems.findIndex((item) => item.id === over.id);
 
     if (oldIndex === -1 || newIndex === -1) return;
 
     // Calculate the new order
     const newOrder = arrayMove(sortedItems, oldIndex, newIndex);
-    const generationIds = newOrder.map((item) => item.generation_id);
+    const itemIds = newOrder.map((item) => item.id);
 
     // Send reorder request to backend
     reorderItems.mutate(
       {
         storyId: story.id,
-        data: { generation_ids: generationIds },
+        data: { item_ids: itemIds },
       },
       {
         onError: (error) => {
@@ -341,7 +341,7 @@ export function StoryContent() {
             onDragEnd={handleDragEnd}
           >
             <SortableContext
-              items={sortedItems.map((item) => item.generation_id)}
+              items={sortedItems.map((item) => item.id)}
               strategy={verticalListSortingStrategy}
             >
               <div className="space-y-3">
@@ -350,9 +350,9 @@ export function StoryContent() {
                     key={item.id}
                     ref={(el) => {
                       if (el) {
-                        itemRefsMap.current.set(item.generation_id, el);
+                        itemRefsMap.current.set(item.id, el);
                       } else {
-                        itemRefsMap.current.delete(item.generation_id);
+                        itemRefsMap.current.delete(item.id);
                       }
                     }}
                   >

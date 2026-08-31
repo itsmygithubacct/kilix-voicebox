@@ -145,7 +145,7 @@ export function SortableStoryChatItem(
   props: Omit<StoryChatItemProps, 'dragHandleProps' | 'isDragging'>,
 ) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
-    id: props.item.generation_id,
+    id: props.item.id,
   });
 
   const style = {
