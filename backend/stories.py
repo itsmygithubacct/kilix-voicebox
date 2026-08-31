@@ -42,6 +42,7 @@ def _generation_duration_ms(generation: DBGeneration) -> int | None:
         type(duration) not in {float, int}
         or not math.isfinite(duration)
         or duration <= 0
+        or duration > MAX_STORY_TIMELINE_MS / 1_000
     ):
         return None
     duration_ms = int(duration * 1_000)
@@ -247,6 +248,10 @@ async def get_story(
     if not story:
         return None
 
+    item_count = _story_item_count(story_id, db)
+    if item_count > MAX_STORY_ITEMS:
+        raise ValueError("STORY_READ_ITEM_BOUND")
+
     # Get all items ordered by start_time_ms
     items = db.query(
         DBStoryItem,
@@ -260,11 +265,16 @@ async def get_story(
         DBGeneration.profile_id == DBVoiceProfile.id
     ).filter(
         DBStoryItem.story_id == story_id
-    ).order_by(DBStoryItem.start_time_ms).all()
+    ).order_by(DBStoryItem.start_time_ms).limit(MAX_STORY_ITEMS + 1).all()
+
+    if len(items) != item_count:
+        raise ValueError("STORY_READ_INTEGRITY")
 
     # Build item details
     item_details = []
     for item, generation, profile_name in items:
+        if _item_window(item, generation) is None:
+            raise ValueError("STORY_READ_BOUND")
         item_detail = StoryItemDetail(
             id=item.id,
             story_id=item.story_id,

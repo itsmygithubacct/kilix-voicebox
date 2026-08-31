@@ -5,7 +5,9 @@ description: "How voice profile management works in Voicebox"
 
 ## Overview
 
-Voice profiles are the foundation of Voicebox's voice cloning capability. Each profile stores reference audio samples and metadata that the TTS model uses to clone a voice.
+Voice profiles are the foundation of Voicebox's voice cloning capability. Each
+profile stores exactly one consented source recording plus its metadata. The
+source remains private product data unless an export explicitly includes it.
 
 ## Architecture
 
@@ -13,7 +15,7 @@ The voice profile system consists of three main components:
 
 **Database Layer:** SQLite tables store profile metadata and sample references.
 
-**File Storage:** Audio samples are stored on disk in a structured directory format.
+**File Storage:** The one source recording is stored privately under its profile.
 
 **Profile Module:** The `profiles.py` module provides the business logic for CRUD operations.
 
@@ -53,9 +55,7 @@ Profiles are stored in the data directory:
 data/
 └── profiles/
     └── {profile_id}/
-        ├── {sample_id_1}.wav
-        ├── {sample_id_2}.wav
-        └── ...
+        └── {sample_id}.wav
 ```
 
 ## Core Functions
@@ -83,63 +83,60 @@ async def create_profile(data: VoiceProfileCreate, db: Session) -> VoiceProfileR
 
 ### Adding Samples
 
-When a sample is added, the audio is validated and copied to the profile directory:
+The public API accepts a bounded upload, stages it in a private product-owned
+file, and always removes that staging file. The profile layer refuses a second
+source before decoding and chooses the permanent storage path itself; callers
+never supply a destination path:
 
 ```python
-async def add_profile_sample(
+async def add_profile_sample_upload(
     profile_id: str,
-    audio_path: str,
+    file: UploadFile,
     reference_text: str,
     db: Session,
 ) -> ProfileSampleResponse:
-    # 1. Validate audio (duration, format, quality)
-    is_valid, error_msg = validate_reference_audio(audio_path)
-    if not is_valid:
-        raise ValueError(f"Invalid reference audio: {error_msg}")
-    
-    # 2. Copy to profile directory
-    sample_id = str(uuid.uuid4())
-    dest_path = profile_dir / f"{sample_id}.wav"
-    audio, sr = load_audio(audio_path)
-    save_audio(audio, str(dest_path), sr)
-    
-    # 3. Create database record
-    db_sample = DBProfileSample(
-        id=sample_id,
-        profile_id=profile_id,
-        audio_path=str(dest_path),
-        reference_text=reference_text,
-    )
-    db.add(db_sample)
-    db.commit()
+    content = await _read_bounded_upload(file, MAX_SAMPLE_BYTES)
+    staged = _stage_private_upload(content, ".wav")
+    try:
+        # profiles.add_profile_sample enforces the exact 1/1 population,
+        # validates the recording, and commits to an owned private path.
+        return await profiles.add_profile_sample(
+            profile_id, str(staged), reference_text, db
+        )
+    finally:
+        staged.unlink(missing_ok=True)
 ```
 
 ### Voice Prompt Creation
 
-When generating speech, the profile's one consented source sample is used directly:
+Voicebox resolves the one owned source descriptor, then delegates prompt
+construction and synthesis to the provider orchestrator. The orchestrator
+requires the request's explicit consent assertion and records consent and
+generation provenance; Voicebox never calls a model directly:
 
 ```python
-async def create_voice_prompt_for_profile(
-    profile_id: str,
+async def generate_speech(
+    request: GenerationRequest,
     db: Session,
 ) -> dict:
-    samples = (
-        db.query(DBProfileSample)
-        .filter_by(profile_id=profile_id)
-        .limit(2)
-        .all()
+    source = await profiles.create_voice_prompt_for_profile(
+        request.profile_id, db
     )
-    if len(samples) != 1:
-        raise ValueError("Exactly one consented source sample is required")
-
-    sample = samples[0]
-    voice_prompt, _ = await tts_model.create_voice_prompt(
-        sample.audio_path,
-        sample.reference_text,
+    # This call returns only after consent and provenance validation and a
+    # private, digest-bound generation commit.
+    return await asyncio.to_thread(
+        _voice_orchestrator().synthesize_clone,
+        profile_id=request.profile_id,
+        sample_path=Path(source["audio_path"]),
+        text=request.text,
+        language=request.language,
+        consent_asserted=request.consent_asserted,
     )
-    
-    return voice_prompt
 ```
+
+The API then writes the relational history record. If that write fails, it
+moves the already-created generation into private recoverable trash rather
+than leaving an orphaned output.
 
 ## Audio Validation
 
@@ -152,16 +149,18 @@ Reference audio is validated before being accepted:
 
 ## Export/Import
 
-Profiles can be exported as ZIP archives for sharing:
+Profile export omits source audio by default:
 
 ```
 profile_export.zip
-├── profile.json     # Metadata
-├── samples/
-│   ├── sample_1.wav
-│   └── sample_1.json  # Reference text
-└── ...
+├── manifest.json    # includes samples_included: false
+└── samples.json     # empty
 ```
+
+`GET /profiles/{id}/export?include_samples=true` is an explicit opt-in that
+adds the one source WAV and its reference text. That archive contains biometric
+source audio; export it only with the speaker's consent and the right to share
+it.
 
 ## API Endpoints
 
@@ -176,7 +175,7 @@ profile_export.zip
 | POST | `/profiles/{id}/samples` | Add sample to profile |
 | PUT | `/profiles/samples/{id}` | Update sample text |
 | DELETE | `/profiles/samples/{id}` | Delete sample |
-| GET | `/profiles/{id}/export` | Export as ZIP |
+| GET | `/profiles/{id}/export` | Export metadata ZIP; source audio is explicit opt-in |
 | POST | `/profiles/import` | Import from ZIP |
 
 ## Best Practices

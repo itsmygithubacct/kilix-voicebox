@@ -997,7 +997,13 @@ async def get_story(
     db: Session = Depends(get_db),
 ):
     """Get a story with all its items."""
-    story = await stories.get_story(story_id, db)
+    try:
+        story = await stories.get_story(story_id, db)
+    except ValueError:
+        raise HTTPException(
+            status_code=409,
+            detail={"code": "STORY_INTEGRITY"},
+        ) from None
     if not story:
         raise HTTPException(status_code=404, detail="Story not found")
     return story

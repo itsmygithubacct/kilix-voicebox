@@ -1028,6 +1028,56 @@ class StoryBoundaryTests(unittest.TestCase):
                 finally:
                     db.close()
 
+    def test_story_read_refuses_overpopulation_and_incomplete_joins(self) -> None:
+        db = self._session()
+        try:
+            self._story_fixture(db)
+            db.add_all([
+                DBStoryItem(
+                    id=f"excess-{index}", story_id="story-1",
+                    generation_id="generation-1", start_time_ms=0, track=0,
+                    trim_start_ms=0, trim_end_ms=0,
+                )
+                for index in range(models.MAX_STORY_ITEMS)
+            ])
+            db.commit()
+            self.assertEqual(
+                db.query(DBStoryItem).count(), models.MAX_STORY_ITEMS + 1
+            )
+            with self.assertRaisesRegex(ValueError, "^STORY_READ_ITEM_BOUND$"):
+                asyncio.run(stories.get_story("story-1", db))
+        finally:
+            db.close()
+
+        db = self._session()
+        try:
+            self._story_fixture(db)
+            db.add(DBStoryItem(
+                id="orphan", story_id="story-1", generation_id="missing",
+                start_time_ms=0, track=0, trim_start_ms=0, trim_end_ms=0,
+            ))
+            db.commit()
+            self.assertEqual(db.query(DBStoryItem).count(), 2)
+            with self.assertRaisesRegex(ValueError, "^STORY_READ_INTEGRITY$"):
+                asyncio.run(stories.get_story("story-1", db))
+        finally:
+            db.close()
+
+    def test_extreme_finite_story_duration_refuses_stably(self) -> None:
+        db = self._session()
+        try:
+            self._story_fixture(db)
+            generation = db.query(DBGeneration).filter_by(
+                id="generation-1"
+            ).one()
+            generation.duration = 1e308
+            db.commit()
+            self.assertIsNone(stories._generation_duration_ms(generation))
+            with self.assertRaisesRegex(ValueError, "^STORY_READ_BOUND$"):
+                asyncio.run(stories.get_story("story-1", db))
+        finally:
+            db.close()
+
     def test_trimmed_story_playback_uses_effective_duration(self) -> None:
         root = Path(__file__).resolve().parents[2] / "app" / "src"
         sources = (
@@ -1046,7 +1096,7 @@ class StoryBoundaryTests(unittest.TestCase):
         developer = (root / "developer" / "voice-profiles.mdx").read_text()
         overview = (root / "overview" / "creating-voice-profiles.mdx").read_text()
         combined = developer + overview
-        self.assertIn("Exactly one consented source sample is required", developer)
+        self.assertIn("enforces the exact 1/1 population", developer)
         self.assertIn("exactly 1/1 source sample", overview)
         for stale_claim in (
             "Multiple Samples",
@@ -1057,6 +1107,27 @@ class StoryBoundaryTests(unittest.TestCase):
         ):
             with self.subTest(stale_claim=stale_claim):
                 self.assertNotIn(stale_claim, combined)
+
+    def test_voice_profile_docs_match_consent_and_export_boundaries(self) -> None:
+        root = Path(__file__).resolve().parents[2] / "docs"
+        developer = (root / "developer" / "voice-profiles.mdx").read_text()
+        overview = (root / "overview" / "creating-voice-profiles.mdx").read_text()
+        for required in (
+            "never supply a destination path",
+            "consent_asserted=request.consent_asserted",
+            "samples_included: false",
+            "include_samples=true",
+            "biometric source audio",
+        ):
+            with self.subTest(required=required):
+                self.assertIn(required, developer + overview)
+        for stale_claim in (
+            "tts_model.create_voice_prompt",
+            "Profiles include voice embeddings, not original audio",
+            "{sample_id_2}.wav",
+        ):
+            with self.subTest(stale_claim=stale_claim):
+                self.assertNotIn(stale_claim, developer + overview)
 
 
 class DesktopPolicyTests(unittest.TestCase):
