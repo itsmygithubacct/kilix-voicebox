@@ -732,10 +732,10 @@ def verify_generated_binary_boundary(root: Path, import_commit: str,
 
 def verify_remote_policy(root: Path, policy: dict[str, Any]) -> dict[str, int]:
     follow_tags = git(
-        root, "config", "--local", "--get-all", "push.followTags", check=False
+        root, "config", "--get-all", "push.followTags", check=False
     )
     require(follow_tags.returncode == 1, "PUSH_FOLLOW_TAGS",
-            "repository-local configuration can publish reachable tags")
+            "effective configuration can publish reachable tags")
     names = strict_git_lines(git(root, "remote"), "REMOTE_NAME_RECORDS")
     maximum = policy["maximum_configured_remotes"]
     authorized = set(policy["authorized_remote_urls"])

@@ -82,7 +82,7 @@ isolated Git configuration.
 Local archives may configure remotes 0/1; a published clone may configure only
 1/1 remote, and both its effective fetch and push URLs must equal
 `https://github.com/itsmygithubacct/kilix-voicebox.git`. Transport-helper,
-mirror, implicit push-refspec, and repository-local follow-tag configuration are
+mirror, implicit push-refspec, and effective follow-tag configuration are
 refused. An authorized publication must still use an explicit full `work/*`
 refspec with `git push --no-follow-tags`; this verifier grants no authority to
 publish another namespace.

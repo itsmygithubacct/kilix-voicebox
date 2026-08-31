@@ -220,6 +220,7 @@ class CuratedImportTests(unittest.TestCase):
             ("mirror", "REMOTE_MIRROR"),
             ("push-refspec", "REMOTE_PUSH_REFSPEC"),
             ("follow-tags", "PUSH_FOLLOW_TAGS"),
+            ("worktree-follow-tags", "PUSH_FOLLOW_TAGS"),
             ("fetch-cr", "REMOTE_FETCH_URL"),
             ("push-cr", "REMOTE_PUSH_URL"),
         )
@@ -246,6 +247,17 @@ class CuratedImportTests(unittest.TestCase):
                         )
                     elif case == "follow-tags":
                         verify.git(root, "config", "push.followTags", "true")
+                    elif case == "worktree-follow-tags":
+                        verify.git(
+                            root, "config", "extensions.worktreeConfig", "true"
+                        )
+                        verify.git(
+                            root,
+                            "config",
+                            "--worktree",
+                            "push.followTags",
+                            "true",
+                        )
                     elif case == "fetch-cr":
                         verify.git(root, "config", "remote.origin.url",
                                    verify.EXPECTED_PUBLIC_REMOTE + "\r")
