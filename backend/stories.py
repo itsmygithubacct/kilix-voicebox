@@ -944,7 +944,11 @@ async def export_story_audio(
             audio_path = owned_generation_path(generation)
             if not audio_path.exists():
                 continue
-            audio, sr = load_audio(str(audio_path), sample_rate=sample_rate)
+            audio, sr = load_audio(
+                audio_path,
+                sample_rate=sample_rate,
+                max_duration_seconds=900.0,
+            )
             sample_rate = sr  # Use actual sample rate from first file
             
             # Get trim values

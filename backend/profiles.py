@@ -188,7 +188,7 @@ async def add_profile_sample(
     
     # Copy audio file to profile directory
     dest_path = profile_dir / f"{sample_id}.wav"
-    audio, sr = load_audio(audio_path)
+    audio, sr = load_audio(audio_path, max_duration_seconds=30.0)
     save_audio(audio, str(dest_path), sr)
     os.chmod(dest_path, 0o600, follow_symlinks=False)
     

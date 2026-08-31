@@ -54,6 +54,7 @@ from backend.private_store import (
     PrivateVoiceStore,
     StoreError,
 )
+from backend.utils.audio import MAX_SOURCE_SAMPLES, load_audio, validate_reference_audio
 
 
 def request(schema: str) -> dict:
@@ -67,18 +68,48 @@ def request(schema: str) -> dict:
     }
 
 
-def wav_bytes(frames: int = 72_000) -> bytes:
+def wav_bytes(frames: int = 72_000, sample_rate: int = 24_000) -> bytes:
     output = io.BytesIO()
     with wave.open(output, "wb") as target:
         target.setnchannels(1)
         target.setsampwidth(2)
-        target.setframerate(24_000)
+        target.setframerate(sample_rate)
         target.writeframes(b"\x01\x00" * frames)
     return output.getvalue()
 
 
 TEST_SESSION_TOKEN = "1" * 64
 configure_session_token(TEST_SESSION_TOKEN)
+
+
+class AudioBoundaryTests(unittest.TestCase):
+    def test_audio_is_bounded_before_decode(self) -> None:
+        info = Mock(samplerate=24_000, channels=1, frames=MAX_SOURCE_SAMPLES + 1)
+        with (
+            patch("backend.utils.audio.sf.info", return_value=info),
+            patch("backend.utils.audio.sf.read") as read,
+            self.assertRaisesRegex(ValueError, "^AUDIO_DECODE_BOUND$"),
+        ):
+            load_audio("oversized.wav")
+        read.assert_not_called()
+
+    def test_resampling_is_deterministic(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "source.wav"
+            source.write_bytes(wav_bytes(frames=480, sample_rate=48_000))
+            first, first_rate = load_audio(source, max_duration_seconds=1.0)
+            second, second_rate = load_audio(source, max_duration_seconds=1.0)
+        self.assertEqual((first_rate, second_rate), (24_000, 24_000))
+        self.assertEqual((len(first), len(second)), (240, 240))
+        self.assertEqual(first.tobytes(), second.tobytes())
+
+    def test_decoder_failures_are_redacted(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / "invalid.wav"
+            source.write_bytes(b"private/path/not-audio")
+            valid, error = validate_reference_audio(str(source))
+        self.assertFalse(valid)
+        self.assertEqual(error, "AUDIO_DECODE_FAILED")
 
 
 class BrowserBoundaryTests(unittest.TestCase):

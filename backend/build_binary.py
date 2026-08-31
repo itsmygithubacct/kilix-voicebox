@@ -47,7 +47,6 @@ def build_server() -> None:
         "fastapi",
         "uvicorn",
         "sqlalchemy",
-        "librosa",
         "soundfile",
     )
     arguments = [

@@ -75,7 +75,8 @@ def main() -> int:
     )
     files = sorted(set(files))
     import_pattern = re.compile(
-        r"^\s*(?:from|import)\s+(?:torch|transformers|mlx|mlx_audio|qwen_tts|huggingface_hub)\b",
+        r"^\s*(?:from|import)\s+(?:torch|transformers|mlx|mlx_audio|qwen_tts|"
+        r"huggingface_hub|librosa|sklearn|numba)\b",
         re.MULTILINE,
     )
     mutable_install = re.compile(r"(?:pip\s+install|git\+https://)")
@@ -94,6 +95,26 @@ def main() -> int:
     require(not bad_imports, "EMBEDDED_RUNTIME_IMPORT")
     require(not bad_installs, "MUTABLE_RUNTIME_INSTALL")
     require(not bad_binds, "REMOTE_BIND_SURFACE")
+
+    forbidden_runtime_packages = {
+        "librosa",
+        "mlx",
+        "numba",
+        "scikit-learn",
+        "torch",
+        "transformers",
+    }
+    locked_packages = set(
+        re.findall(
+            r'^name = "([^"]+)"$',
+            (ROOT / "uv.lock").read_text(encoding="utf-8"),
+            re.MULTILINE,
+        )
+    )
+    require(
+        not (locked_packages & forbidden_runtime_packages),
+        "MODEL_RUNTIME_DEPENDENCY",
+    )
 
     generated_api_roots = {
         ROOT / "app/src/lib/api/core",
@@ -243,7 +264,8 @@ def main() -> int:
         f"embedded runtime imports 0/{len(files)}; mutable installs 0/{len(files)}; "
         f"remote bind surfaces 0/{len(files)}; forbidden webview permissions "
         f"0/{len(forbidden_permissions)}; forbidden process controls "
-        f"0/{len(forbidden_process_discovery)}; required controls "
+        f"0/{len(forbidden_process_discovery)}; forbidden runtime packages "
+        f"0/{len(forbidden_runtime_packages)}; required controls "
         f"{sum(required)}/{len(required)})"
     )
     return 0
