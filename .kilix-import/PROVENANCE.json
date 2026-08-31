@@ -40,8 +40,17 @@
     "upstream_history_imported": false,
     "dirty_prototype_read": false,
     "dirty_prototype_copied": false,
-    "remote_population_expected": 0,
+    "remote_population_at_import": 0,
     "product_identity": "itsmygithubacct <itsmygithubacct@users.noreply.github.com>"
+  },
+  "publication": {
+    "status": "PUBLIC_WORK_REF_AUTHORIZED",
+    "hygiene_boundary_commit": "f76181896488583bc0d1abb9b37752e075e99cf3",
+    "hygiene_boundary_tree": "6e02708895e7dc1c5ede3331afb847be6d596b1c",
+    "maximum_configured_remotes": 1,
+    "authorized_remote_urls": [
+      "https://github.com/itsmygithubacct/kilix-voicebox.git"
+    ]
   },
   "expected_source_risks": [
     {

@@ -1,8 +1,8 @@
 # Security policy
 
-This is a local-only release candidate. It does not claim a public security
-contact, signed release channel, or supported public version. Report suspected
-issues through the release owner's approved private channel.
+This public repository contains an unreleased work candidate. It does not claim
+a public security contact, signed release channel, or supported public version.
+Report suspected issues through the release owner's approved private channel.
 
 The intended boundary is deliberately narrow:
 

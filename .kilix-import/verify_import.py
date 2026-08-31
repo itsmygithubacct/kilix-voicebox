@@ -23,6 +23,9 @@ EXPECTED_STATUS = "F104CONT2_IMPORT_HYGIENE_PROOF_CANDIDATE_NOT_P8"
 EXPECTED_IDENTITY = "itsmygithubacct <itsmygithubacct@users.noreply.github.com>"
 EXPECTED_IMPORT_COMMIT = "08e763fa8f734fe519b14cf6e9810404a7aa2617"
 EXPECTED_IMPORT_TREE = "57f4545ddb5b163b0df8429b0fb12de66d905ebd"
+EXPECTED_HYGIENE_COMMIT = "f76181896488583bc0d1abb9b37752e075e99cf3"
+EXPECTED_HYGIENE_TREE = "6e02708895e7dc1c5ede3331afb847be6d596b1c"
+EXPECTED_PUBLIC_REMOTE = "https://github.com/itsmygithubacct/kilix-voicebox.git"
 EXPECTED_CONTROL_PATHS = [
     ".kilix-import/PROVENANCE.json",
     ".kilix-import/README.md",
@@ -159,9 +162,16 @@ def validate_provenance(provenance: dict[str, Any]) -> None:
         "upstream_history_imported": False,
         "dirty_prototype_read": False,
         "dirty_prototype_copied": False,
-        "remote_population_expected": 0,
+        "remote_population_at_import": 0,
         "product_identity": EXPECTED_IDENTITY,
     }, "IMPORT_BOUNDARY", "curated import boundary drifted")
+    require(provenance.get("publication", {}) == {
+        "status": "PUBLIC_WORK_REF_AUTHORIZED",
+        "hygiene_boundary_commit": EXPECTED_HYGIENE_COMMIT,
+        "hygiene_boundary_tree": EXPECTED_HYGIENE_TREE,
+        "maximum_configured_remotes": 1,
+        "authorized_remote_urls": [EXPECTED_PUBLIC_REMOTE],
+    }, "PUBLICATION_BOUNDARY", "curated publication boundary drifted")
     evidence = provenance.get("accepted_evidence", [])
     require(len(evidence) == 3, "EVIDENCE_POPULATION",
             "accepted evidence population differs from 3/3")
@@ -338,12 +348,12 @@ def decoded_idat(chunks: list[tuple[bytes, bytes]]) -> bytes:
         raise ImportErrorDetail("PNG_IDAT", f"PNG IDAT stream is invalid: {error}") from error
 
 
-def verify_png_normalization(root: Path, import_commit: str,
+def verify_png_normalization(root: Path, import_commit: str, boundary_commit: str,
                              rows: list[dict[str, Any]]) -> int:
     for row in rows:
         path = row["path"]
         imported = git_blob(root, import_commit, path)
-        current = (root / path).read_bytes()
+        current = git_blob(root, boundary_commit, path)
         require(sha256_bytes(imported) == row["import_sha256"],
                 "PNG_IMPORT_IDENTITY", f"imported PNG identity drifted: {path}")
         require(sha256_bytes(current) == row["current_sha256"],
@@ -466,6 +476,7 @@ def verify_historical_match_proof(root: Path, import_commit: str,
 
 
 def verify_generated_binary_boundary(root: Path, import_commit: str,
+                                     boundary_commit: str,
                                      boundary: dict[str, Any]) -> dict[str, int]:
     path = boundary["path"]
     imported = git_blob(root, import_commit, path)
@@ -476,21 +487,22 @@ def verify_generated_binary_boundary(root: Path, import_commit: str,
     historical_counts = verify_historical_match_proof(
         root, import_commit, path, imported, boundary["historical_match_proof"]
     )
-    require(not (root / path).exists(), "GENERATED_BINARY_PRESENT",
-            "generated binary must not be stored in the current fork tree")
+    boundary_binary = git(
+        root, "cat-file", "-e", f"{boundary_commit}:{path}", check=False
+    )
+    require(boundary_binary.returncode != 0, "GENERATED_BINARY_PRESENT",
+            "generated binary must not be stored in the hygiene-boundary tree")
 
     ignore = boundary["gitignore"]
-    require(sha256_file(root / ignore["path"]) == ignore["sha256"],
+    boundary_ignore = git_blob(root, boundary_commit, ignore["path"])
+    require(sha256_bytes(boundary_ignore) == ignore["sha256"],
             "GENERATED_IGNORE_IDENTITY", "generated-binary ignore file drifted")
-    ignore_lines = (root / ignore["path"]).read_text(encoding="utf-8").splitlines()
+    ignore_lines = boundary_ignore.decode("utf-8").splitlines()
     require(ignore_lines.count(ignore["exact_rule"]) == 1,
             "GENERATED_IGNORE_RULE", "generated binary needs exactly 1/1 narrow ignore rule")
-    ignored = git(root, "check-ignore", "--quiet", "--no-index", "--", path, check=False)
-    require(ignored.returncode == 0, "GENERATED_NOT_IGNORED",
-            "regenerated binary would become an untracked publication input")
 
     regenerator = boundary["regenerator"]
-    current_regenerator = (root / regenerator["path"]).read_bytes()
+    current_regenerator = git_blob(root, boundary_commit, regenerator["path"])
     imported_regenerator = git_blob(root, import_commit, regenerator["path"])
     require(current_regenerator == imported_regenerator,
             "REGENERATOR_DRIFT", "upstream macOS regeneration rule changed")
@@ -508,9 +520,11 @@ def verify_generated_binary_boundary(root: Path, import_commit: str,
             "generated resource configuration is not macOS-only")
     base_path = resource["base_path"]
     platform_path = resource["platform_path"]
-    require(sha256_file(root / base_path) == resource["base_sha256"],
+    boundary_base = git_blob(root, boundary_commit, base_path)
+    boundary_platform = git_blob(root, boundary_commit, platform_path)
+    require(sha256_bytes(boundary_base) == resource["base_sha256"],
             "BASE_CONFIG_IDENTITY", "base Tauri configuration identity drifted")
-    require(sha256_file(root / platform_path) == resource["platform_sha256"],
+    require(sha256_bytes(boundary_platform) == resource["platform_sha256"],
             "PLATFORM_CONFIG_IDENTITY", "macOS Tauri configuration identity drifted")
 
     imported_base = json.loads(git_blob(root, import_commit, base_path))
@@ -521,12 +535,10 @@ def verify_generated_binary_boundary(root: Path, import_commit: str,
     expected_bundle = dict(imported_base["bundle"])
     expected_bundle.pop("resources")
     expected_base["bundle"] = expected_bundle
-    with (root / base_path).open("r", encoding="utf-8") as handle:
-        current_base = json.load(handle)
+    current_base = json.loads(boundary_base)
     require(current_base == expected_base, "BASE_CONFIG_DELTA",
             "base Tauri config changed beyond removing the macOS resource mapping")
-    with (root / platform_path).open("r", encoding="utf-8") as handle:
-        platform_config = json.load(handle)
+    platform_config = json.loads(boundary_platform)
     require(platform_config == {
         "$schema": imported_base["$schema"],
         "bundle": {"resources": resource["resources"]},
@@ -538,6 +550,51 @@ def verify_generated_binary_boundary(root: Path, import_commit: str,
     require(absent_at_import.returncode != 0, "PLATFORM_CONFIG_PREEXISTED",
             "macOS split config unexpectedly existed in the immutable import root")
     return {"generated_binaries_removed": 1, **historical_counts}
+
+
+def verify_remote_policy(root: Path, policy: dict[str, Any]) -> dict[str, int]:
+    names = [
+        line for line in git(root, "remote").stdout.decode("utf-8").splitlines()
+        if line
+    ]
+    maximum = policy["maximum_configured_remotes"]
+    authorized = set(policy["authorized_remote_urls"])
+    require(len(names) <= maximum, "REMOTE_POPULATION",
+            f"configured remote population exceeds {maximum}/{maximum}")
+
+    fetch_urls = 0
+    push_urls = 0
+    for name in names:
+        require(re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._-]*", name) is not None,
+                "REMOTE_NAME", "configured remote name is not a bounded identifier")
+        fetch = [
+            line for line in git(
+                root, "remote", "get-url", "--all", name, check=False
+            ).stdout.decode("utf-8").splitlines()
+            if line
+        ]
+        effective_push = [
+            line for line in git(
+                root, "remote", "get-url", "--push", "--all", name, check=False
+            ).stdout.decode("utf-8").splitlines()
+            if line
+        ]
+        require(len(fetch) == 1, "REMOTE_FETCH_POPULATION",
+                "each configured remote needs exactly 1/1 fetch URL")
+        require(len(effective_push) == 1, "REMOTE_PUSH_POPULATION",
+                "each configured remote needs exactly 1/1 effective push URL")
+        require(fetch[0] in authorized, "REMOTE_FETCH_URL",
+                "configured fetch URL is outside the exact public repository allowlist")
+        require(effective_push[0] in authorized, "REMOTE_PUSH_URL",
+                "configured push URL is outside the exact public repository allowlist")
+        fetch_urls += len(fetch)
+        push_urls += len(effective_push)
+
+    return {
+        "remotes": len(names),
+        "remote_fetch_urls": fetch_urls,
+        "remote_push_urls": push_urls,
+    }
 
 
 def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[str, int]:
@@ -554,6 +611,19 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
     import_tree = git(root, "rev-parse", f"{import_commit}^{{tree}}").stdout.decode("ascii").strip()
     require(import_tree == provenance["import"]["product_snapshot_tree"],
             "IMPORT_PRODUCT_TREE", "curated product snapshot tree drifted")
+
+    publication = provenance["publication"]
+    boundary_commit = publication["hygiene_boundary_commit"]
+    boundary_tree = git(
+        root, "rev-parse", f"{boundary_commit}^{{tree}}"
+    ).stdout.decode("ascii").strip()
+    require(boundary_tree == publication["hygiene_boundary_tree"],
+            "HYGIENE_BOUNDARY_TREE", "curated hygiene-boundary tree drifted")
+    boundary_ancestor = git(
+        root, "merge-base", "--is-ancestor", boundary_commit, "HEAD", check=False
+    )
+    require(boundary_ancestor.returncode == 0, "HYGIENE_BOUNDARY_ANCESTRY",
+            "curated hygiene boundary is not an ancestor of the product candidate")
 
     import_paths = tracked_paths(root, import_commit)
     import_owned = sorted(path for path in import_paths if path.startswith(OWNED_PREFIX))
@@ -578,19 +648,27 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
     require(import_risks == expected_risk_paths, "SOURCE_RISK_POPULATION",
             f"import source risk population differs from expected 1/1: {import_risks!r}")
 
-    current_paths = tracked_paths(root)
-    owned = sorted(path for path in current_paths if path.startswith(OWNED_PREFIX))
-    source = sorted(path for path in current_paths if not path.startswith(OWNED_PREFIX))
-    require(owned == provenance["import"]["control_paths"], "OWNED_POPULATION",
-            "current import control population differs from 4/4")
+    boundary_paths = tracked_paths(root, boundary_commit)
+    boundary_owned = sorted(
+        path for path in boundary_paths if path.startswith(OWNED_PREFIX)
+    )
+    boundary_source = sorted(
+        path for path in boundary_paths if not path.startswith(OWNED_PREFIX)
+    )
+    require(boundary_owned == provenance["import"]["control_paths"],
+            "HYGIENE_CONTROL_PATHS",
+            "hygiene-boundary import control population differs from 4/4")
     binary_boundary = provenance["hygiene_delta"]["generated_binary_boundary"]
     removed_path = binary_boundary["path"]
     added_path = binary_boundary["resource_config"]["platform_path"]
-    expected_current_source = sorted((set(import_source) - {removed_path}) | {added_path})
-    require(source == expected_current_source, "CURRENT_SOURCE_PATHS",
-            "current source population differs from the exact 405/406 retained plus 1/1 added paths")
+    expected_boundary_source = sorted(
+        (set(import_source) - {removed_path}) | {added_path}
+    )
+    require(boundary_source == expected_boundary_source, "HYGIENE_SOURCE_PATHS",
+            "hygiene-boundary source population differs from the exact "
+            "405/406 retained plus 1/1 added paths")
     source_delta_raw = git(
-        root, "diff", "--name-only", "-z", import_commit, "HEAD", "--"
+        root, "diff", "--name-only", "-z", import_commit, boundary_commit, "--"
     ).stdout
     source_delta = sorted(
         part.decode("utf-8", "strict")
@@ -599,21 +677,44 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
     )
     normalized_rows = provenance["hygiene_delta"]["normalized_pngs"]
     expected_delta = provenance["hygiene_delta"]["changed_source_paths"]
-    require(source_delta == expected_delta, "CURRENT_SOURCE_DELTA",
-            "current source delta differs from the exact 8/8 bounded paths")
-    normalized_count = verify_png_normalization(root, import_commit, normalized_rows)
+    require(source_delta == expected_delta, "HYGIENE_SOURCE_DELTA",
+            "hygiene-boundary source delta differs from the exact 8/8 bounded paths")
+    normalized_count = verify_png_normalization(
+        root, import_commit, boundary_commit, normalized_rows
+    )
     generated_binary_counts = verify_generated_binary_boundary(
-        root, import_commit, binary_boundary
+        root, import_commit, boundary_commit, binary_boundary
     )
 
-    current_risks = risk_paths(source)
-    require(current_risks == expected_risk_paths, "CURRENT_RISK_POPULATION",
-            f"current source risk population differs from expected 1/1: {current_risks!r}")
+    boundary_risks = risk_paths(boundary_source)
+    require(boundary_risks == expected_risk_paths, "HYGIENE_RISK_POPULATION",
+            "hygiene-boundary source risk population differs from expected 1/1: "
+            f"{boundary_risks!r}")
     risk = provenance["expected_source_risks"][0]
-    risk_path = root / risk["path"]
-    require(risk_path.stat().st_size == risk["bytes"]
-            and sha256_file(risk_path) == risk["sha256"],
-            "SOURCE_RISK_IDENTITY", "accepted empty placeholder identity drifted")
+    boundary_risk = git_blob(root, boundary_commit, risk["path"])
+    require(len(boundary_risk) == risk["bytes"]
+            and sha256_bytes(boundary_risk) == risk["sha256"],
+            "HYGIENE_RISK_IDENTITY", "accepted empty placeholder identity drifted")
+
+    current_paths = tracked_paths(root)
+    owned = sorted(path for path in current_paths if path.startswith(OWNED_PREFIX))
+    source = sorted(path for path in current_paths if not path.startswith(OWNED_PREFIX))
+    require(owned == provenance["import"]["control_paths"], "OWNED_POPULATION",
+            "current import control population differs from 4/4")
+    current_risks = risk_paths(source)
+    require(not current_risks, "CURRENT_RISK_POPULATION",
+            f"current product tree contains forbidden artifact paths: {current_risks!r}")
+    current_binary = git(
+        root, "cat-file", "-e", f"HEAD:{removed_path}", check=False
+    )
+    require(current_binary.returncode != 0, "CURRENT_GENERATED_BINARY",
+            "generated macOS binary is tracked in the current product tree")
+    ignored = git(
+        root, "check-ignore", "--quiet", "--no-index", "--", removed_path,
+        check=False,
+    )
+    require(ignored.returncode == 0, "CURRENT_GENERATED_NOT_IGNORED",
+            "regenerated macOS binary would become a publication input")
 
     licence_path = root / expected["licence_path"]
     require(sha256_file(licence_path) == expected["licence_sha256"],
@@ -624,9 +725,7 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
     require(not risk_paths(untracked), "UNTRACKED_PRIVATE_ARTIFACT",
             "untracked private/generated artifact path is present")
 
-    remotes = [line for line in git(root, "remote").stdout.decode("utf-8").splitlines() if line]
-    require(len(remotes) == provenance["import"]["remote_population_expected"],
-            "REMOTE_POPULATION", "publication is not authorized; expected zero remotes")
+    remote_counts = verify_remote_policy(root, publication)
 
     upstream_object = git(root, "cat-file", "-e", f"{expected['commit']}^{{commit}}", check=False)
     require(upstream_object.returncode != 0, "UPSTREAM_HISTORY_PRESENT",
@@ -645,7 +744,9 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
         "source_files": len(import_source),
         "source_blob_bytes": blob_bytes,
         "source_risks": len(import_risks),
+        "boundary_source_files": len(boundary_source),
         "current_source_files": len(source),
+        "current_source_risks": len(current_risks),
         "source_delta_paths": len(source_delta),
         "normalized_pngs": normalized_count,
         **generated_binary_counts,
@@ -653,7 +754,9 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
         "scanner_exception_candidates": 0,
         "owned_files": len(owned),
         "product_commits": len(authors),
-        "remotes": len(remotes),
+        "hygiene_boundary_commits": 1,
+        "hygiene_boundary_ancestors": 1,
+        **remote_counts,
     }
 
 
@@ -667,8 +770,10 @@ def run() -> None:
         f"({counts['source_files']}/406 source files; "
         f"{counts['source_blob_bytes']}/54600537 source blob bytes; "
         f"{counts['source_risks']}/1 accepted source-risk path; "
-        f"{counts['current_source_files']}/406 current source paths; "
-        f"{counts['source_delta_paths']}/8 source-delta paths; "
+        f"{counts['hygiene_boundary_commits']}/1 hygiene-boundary commit; "
+        f"{counts['hygiene_boundary_ancestors']}/1 hygiene-boundary ancestry; "
+        f"{counts['boundary_source_files']}/406 hygiene-boundary source paths; "
+        f"{counts['source_delta_paths']}/8 hygiene-boundary source-delta paths; "
         f"{counts['normalized_pngs']}/4 lossless PNG normalizations; "
         f"{counts['generated_binaries_removed']}/1 generated binary removed; "
         f"{counts['historical_binary_units']}/1 historical binary unit reproduced; "
@@ -680,9 +785,13 @@ def run() -> None:
         f"{counts['platform_resource_configs']}/1 macOS-only resource config; "
         f"{counts['scanner_exception_candidates']}/0 scanner exceptions required; "
         f"{counts['owned_files']}/4 import-control files; "
+        f"{counts['current_source_risks']}/{counts['current_source_files']} "
+        f"forbidden current source paths; "
         f"{counts['product_commits']}/{counts['product_commits']} product commits "
-        f"use the project identity; remotes={counts['remotes']} expected=0; "
-        "upstream-history commits=0 expected=0)"
+        f"use the project identity; {counts['remotes']}/1 configured remotes; "
+        f"{counts['remote_fetch_urls']}/{counts['remotes']} authorized fetch URLs; "
+        f"{counts['remote_push_urls']}/{counts['remotes']} authorized push URLs; "
+        "upstream-history commits=0/0)"
     )
 
 

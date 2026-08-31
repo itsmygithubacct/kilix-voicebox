@@ -25,11 +25,13 @@ upstream source-risk population is exactly 1/1 path:
 for audio/model/database artifacts and private/generated material are each
 0/1 allowed populations.
 
-The bounded fork delta after that immutable root commit normalizes the IDAT
-encoding of 4/4 PNG paths. Their 4/4 decoded scanline streams and every 4/4
-non-IDAT chunk populations remain byte-identical to the imported objects. This
-removes 4/4 incidental matches from the publication secret-pattern arm without
-changing pixels or metadata.
+The bounded historical hygiene delta is frozen at commit
+`f76181896488583bc0d1abb9b37752e075e99cf3`, tree
+`6e02708895e7dc1c5ede3331afb847be6d596b1c`. From the immutable import root to
+that boundary, the fork normalizes the IDAT encoding of 4/4 PNG paths. Their
+4/4 decoded scanline streams and every 4/4 non-IDAT chunk populations remain
+byte-identical to the imported objects. This removes 4/4 incidental matches
+from the publication secret-pattern arm without changing pixels or metadata.
 
 The imported root also contains 1/1 generated Apple asset catalog with 1/1
 binary match in the PII/host-pattern arm. The current fork does not track that
@@ -61,20 +63,24 @@ python3 -m unittest discover -s .kilix-import -p 'test_*.py' -v
 
 The checker reconstructs a temporary Git index from the root product snapshot
 and requires its 406/406 source paths to equal the accepted upstream tree. It
-then limits the current source delta to 8/8 exact paths: 4/4 normalized PNGs,
+then requires the exact hygiene boundary to remain an ancestor 1/1 and limits
+the import-to-boundary source delta to 8/8 exact paths: 4/4 normalized PNGs,
 1/1 removed generated binary, 1/1 exact ignore rule, and 2/2 Tauri config paths.
 It proves PNG decoded/metadata identity, the removed binary's imported identity,
 the 1/1 historical match and its bounded context, the 3/3 generator-input
 measurements, the unchanged regeneration rule, and exact relocation of all 3/3
-resources. It also checks provenance, clean worktree state, risk-path inventory,
-licence bytes, absent upstream history, absent remotes, and all 4/4
-product-commit identities.
+resources at that historical boundary. It separately audits the current product
+tree for forbidden tracked/untracked artifact paths, the removed generated
+binary, licence bytes, absent upstream history, and complete project identity.
+Local archives may configure remotes 0/1; a published clone may configure only
+1/1 remote, and both its effective fetch and push URLs must equal
+`https://github.com/itsmygithubacct/kilix-voicebox.git`.
 
 ## Status boundary
 
-This is an F104CONT2 import-hygiene proof candidate. It establishes the fork
-boundary and reproducible measurements only. It does not independently
-adjudicate the historical 1/1 match, enter P8, remove embedded inference,
-freeze a provider protocol, select a public product name, create a remote, or
-claim implementation, integration, qualification, build support, or release
-admission.
+The frozen `f761818…` object remains the F104CONT2 import-hygiene proof
+candidate. Its boundary and measurements do not retroactively claim P8 or
+stream acceptance. Later product implementation and work-ref publication are
+audited as descendants rather than being mistaken for the original 8/8-path
+hygiene delta. This verifier still grants release admission 0/1 and historical
+content adjudication 0/1.

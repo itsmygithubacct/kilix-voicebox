@@ -1,8 +1,8 @@
 # Contributing to the F104 Voicebox candidate
 
-This repository is a local-only release candidate. It does not currently have a
-public remote or public contribution channel. Changes are accepted through the
-release owner's approved private workflow.
+This repository publishes an F104 candidate work ref for reproducibility. It
+does not currently claim a public contribution intake or supported release.
+Changes are accepted through the release owner's approved workflow.
 
 ## Development setup
 

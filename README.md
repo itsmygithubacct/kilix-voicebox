@@ -97,5 +97,7 @@ Product data follows XDG conventions. Override the base only for isolated tests
 with `--data-dir`; startup rejects non-private directories.
 Provider sockets use `XDG_RUNTIME_DIR` and fixed endpoint names.
 
-This local candidate has no configured publication remote. Repository creation
-and public release remain owner-reserved.
+The candidate work ref is public at
+`https://github.com/itsmygithubacct/kilix-voicebox.git`. That work ref is not a
+release: pushes to `main`, tags, repository settings, and release admission
+remain owner-reserved.

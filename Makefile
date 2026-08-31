@@ -155,6 +155,8 @@ typecheck: ## Run TypeScript type checking
 	bun run tsc --noEmit
 
 check-kilix: ## Verify the provider-only Voicebox boundary
+	uv run --frozen python .kilix-import/verify_import.py
+	uv run --frozen python -m unittest discover -s .kilix-import -p 'test_*.py' -v
 	uv run --frozen python tools/check_kilix_boundary.py
 	uv run --frozen python tools/check_import_inventory.py
 

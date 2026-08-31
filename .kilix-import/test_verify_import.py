@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import os
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -27,12 +29,14 @@ class CuratedImportTests(unittest.TestCase):
     def test_provenance_is_exact(self) -> None:
         verify.validate_provenance(self.provenance)
 
-    def test_current_repository_reconstructs_upstream(self) -> None:
+    def test_repository_preserves_import_and_publication_boundaries(self) -> None:
         counts = verify.verify_current_repository(self.root, self.provenance)
         self.assertEqual(counts["source_files"], 406)
         self.assertEqual(counts["source_blob_bytes"], 54600537)
         self.assertEqual(counts["source_risks"], 1)
-        self.assertEqual(counts["current_source_files"], 406)
+        self.assertEqual(counts["hygiene_boundary_commits"], 1)
+        self.assertEqual(counts["hygiene_boundary_ancestors"], 1)
+        self.assertEqual(counts["boundary_source_files"], 406)
         self.assertEqual(counts["source_delta_paths"], 8)
         self.assertEqual(counts["normalized_pngs"], 4)
         self.assertEqual(counts["generated_binaries_removed"], 1)
@@ -45,6 +49,10 @@ class CuratedImportTests(unittest.TestCase):
         self.assertEqual(counts["historical_adjudications"], 0)
         self.assertEqual(counts["platform_resource_configs"], 1)
         self.assertEqual(counts["scanner_exception_candidates"], 0)
+        self.assertEqual(counts["current_source_risks"], 0)
+        self.assertLessEqual(counts["remotes"], 1)
+        self.assertEqual(counts["remote_fetch_urls"], counts["remotes"])
+        self.assertEqual(counts["remote_push_urls"], counts["remotes"])
 
     def test_historical_match_measurement_is_reproducible(self) -> None:
         boundary = self.provenance["hygiene_delta"]["generated_binary_boundary"]
@@ -102,8 +110,62 @@ class CuratedImportTests(unittest.TestCase):
 
     def test_remote_policy_mutation_is_refused(self) -> None:
         mutant = copy.deepcopy(self.provenance)
-        mutant["import"]["remote_population_expected"] = 1
-        self.refusal(mutant, "IMPORT_BOUNDARY")
+        mutant["publication"]["authorized_remote_urls"] = [
+            "https://github.com/example/not-voicebox.git"
+        ]
+        self.refusal(mutant, "PUBLICATION_BOUNDARY")
+
+    def test_hygiene_boundary_mutation_is_refused(self) -> None:
+        mutant = copy.deepcopy(self.provenance)
+        mutant["publication"]["hygiene_boundary_commit"] = "0" * 40
+        self.refusal(mutant, "PUBLICATION_BOUNDARY")
+
+    def test_remote_policy_accepts_zero_or_one_official_remote(self) -> None:
+        scratch = os.environ.get("TMPDIR")
+        with tempfile.TemporaryDirectory(prefix="voicebox-remote-", dir=scratch) as temp:
+            root = Path(temp)
+            verify.git(root, "init", "--quiet")
+            policy = self.provenance["publication"]
+            self.assertEqual(verify.verify_remote_policy(root, policy), {
+                "remotes": 0,
+                "remote_fetch_urls": 0,
+                "remote_push_urls": 0,
+            })
+            verify.git(root, "remote", "add", "origin", verify.EXPECTED_PUBLIC_REMOTE)
+            self.assertEqual(verify.verify_remote_policy(root, policy), {
+                "remotes": 1,
+                "remote_fetch_urls": 1,
+                "remote_push_urls": 1,
+            })
+
+    def test_remote_policy_refuses_unapproved_or_multiple_remotes(self) -> None:
+        scratch = os.environ.get("TMPDIR")
+        policy = self.provenance["publication"]
+        with tempfile.TemporaryDirectory(prefix="voicebox-remote-", dir=scratch) as temp:
+            root = Path(temp)
+            verify.git(root, "init", "--quiet")
+            verify.git(root, "remote", "add", "origin",
+                       "https://github.com/example/not-voicebox.git")
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_remote_policy(root, policy)
+            self.assertEqual(caught.exception.code, "REMOTE_FETCH_URL")
+        with tempfile.TemporaryDirectory(prefix="voicebox-remote-", dir=scratch) as temp:
+            root = Path(temp)
+            verify.git(root, "init", "--quiet")
+            verify.git(root, "remote", "add", "origin", verify.EXPECTED_PUBLIC_REMOTE)
+            verify.git(root, "remote", "set-url", "--add", "--push", "origin",
+                       "https://github.com/example/not-voicebox.git")
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_remote_policy(root, policy)
+            self.assertEqual(caught.exception.code, "REMOTE_PUSH_URL")
+        with tempfile.TemporaryDirectory(prefix="voicebox-remote-", dir=scratch) as temp:
+            root = Path(temp)
+            verify.git(root, "init", "--quiet")
+            verify.git(root, "remote", "add", "origin", verify.EXPECTED_PUBLIC_REMOTE)
+            verify.git(root, "remote", "add", "mirror", verify.EXPECTED_PUBLIC_REMOTE)
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_remote_policy(root, policy)
+            self.assertEqual(caught.exception.code, "REMOTE_POPULATION")
 
     def test_product_snapshot_mutation_is_refused(self) -> None:
         mutant = copy.deepcopy(self.provenance)
