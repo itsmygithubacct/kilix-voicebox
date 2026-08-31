@@ -45,6 +45,7 @@ def git(*arguments: str) -> str:
         "GIT_INDEX_FILE",
         "GIT_NAMESPACE",
         "GIT_OBJECT_DIRECTORY",
+        "GIT_QUARANTINE_PATH",
         "GIT_REPLACE_REF_BASE",
         "GIT_SHALLOW_FILE",
         "GIT_WORK_TREE",

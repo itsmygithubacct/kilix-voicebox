@@ -155,7 +155,13 @@ typecheck: ## Run TypeScript type checking
 	bun run tsc --noEmit
 
 check-kilix: ## Verify the provider-only Voicebox boundary
-	uv run --frozen python .kilix-import/verify_import.py
+	@set -o pipefail; env -u GIT_ALTERNATE_OBJECT_DIRECTORIES \
+		-u GIT_COMMON_DIR -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS \
+		-u GIT_DIR -u GIT_INDEX_FILE -u GIT_NAMESPACE \
+		-u GIT_OBJECT_DIRECTORY -u GIT_QUARANTINE_PATH \
+		-u GIT_REPLACE_REF_BASE -u GIT_SHALLOW_FILE -u GIT_WORK_TREE \
+		GIT_NO_REPLACE_OBJECTS=1 git -C "$(CURDIR)" show \
+		HEAD:.kilix-import/verify_import.py | uv run --frozen python -
 	uv run --frozen python -m unittest discover -s .kilix-import -p 'test_*.py' -v
 	uv run --frozen python tools/check_kilix_boundary.py
 	uv run --frozen python tools/check_import_inventory.py

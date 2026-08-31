@@ -3,6 +3,9 @@ from __future__ import annotations
 import copy
 import importlib.util
 import os
+import shlex
+import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
@@ -350,6 +353,87 @@ class CuratedImportTests(unittest.TestCase):
                     root, "HEAD", [".gitattributes", "payload.txt"]
                 )
             self.assertEqual(caught.exception.code, "WORKTREE_BLOB_IDENTITY")
+
+    def test_head_bootstrap_refuses_smudged_makefile(self) -> None:
+        scratch = os.environ.get("TMPDIR")
+        with tempfile.TemporaryDirectory(
+            prefix="voicebox-head-bootstrap-", dir=scratch
+        ) as temp:
+            temporary = Path(temp)
+            root = temporary / "repository"
+            commit = verify.git(self.root, "rev-parse", "HEAD").stdout.strip()
+            verify.git(
+                self.root,
+                "clone",
+                "--quiet",
+                "--no-local",
+                "--no-tags",
+                "--no-checkout",
+                str(self.root),
+                str(root),
+            )
+            verify.git(
+                root, "checkout", "--quiet", "--detach", commit.decode("ascii")
+            )
+            trusted_makefile = temporary / "trusted.Makefile"
+            fake_makefile = temporary / "fake.Makefile"
+            trusted_makefile.write_bytes(verify.git_blob(root, "HEAD", "Makefile"))
+            fake_makefile.write_text(
+                "check-kilix:\n\t@printf 'FAKE_GATE_PASS\\n'\n",
+                encoding="utf-8",
+            )
+            attributes = Path(
+                verify.git(root, "rev-parse", "--git-path", "info/attributes")
+                .stdout.decode()
+                .strip()
+            )
+            if not attributes.is_absolute():
+                attributes = root / attributes
+            attributes.parent.mkdir(parents=True, exist_ok=True)
+            attributes.write_text("Makefile filter=fake-gate\n", encoding="utf-8")
+            verify.git(
+                root,
+                "config",
+                "filter.fake-gate.clean",
+                f"cat {shlex.quote(str(trusted_makefile))}",
+            )
+            verify.git(
+                root,
+                "config",
+                "filter.fake-gate.smudge",
+                f"cat {shlex.quote(str(fake_makefile))}",
+            )
+            verify.git(root, "config", "filter.fake-gate.required", "true")
+            (root / "Makefile").unlink()
+            verify.git(root, "checkout", "--", "Makefile")
+            self.assertEqual(verify.git(root, "status", "--porcelain").stdout, b"")
+
+            fake_gate = subprocess.run(
+                ("make", "check-kilix"),
+                cwd=root,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+            )
+            self.assertEqual(fake_gate.returncode, 0)
+            self.assertIn(b"FAKE_GATE_PASS", fake_gate.stdout)
+
+            environment = os.environ.copy()
+            environment["GIT_NO_REPLACE_OBJECTS"] = "1"
+            head_verifier = verify.git_blob(
+                root, "HEAD", ".kilix-import/verify_import.py"
+            )
+            trusted_gate = subprocess.run(
+                (sys.executable, "-"),
+                cwd=root,
+                input=head_verifier,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
+            )
+            self.assertEqual(trusted_gate.returncode, 1)
+            self.assertIn(b"WORKTREE_BLOB_IDENTITY", trusted_gate.stderr)
 
     def test_repository_shape_refuses_hidden_index_paths(self) -> None:
         scratch = os.environ.get("TMPDIR")

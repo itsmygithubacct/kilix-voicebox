@@ -53,11 +53,24 @@ word match and 0/1 matching tokens occur across that input population. These
 are reproducible measurements, not a conclusion about content. Independent
 historical-blob adjudication remains 0/1.
 
-Run the exact import and hygiene-delta check from any directory inside this
-repository:
+Before trusting the checked-out Makefile or any worktree control, run the
+verifier blob directly from `HEAD` at the repository root. `pipefail` is
+required so a failed object read cannot become an empty successful script:
 
 ```sh
-python3 .kilix-import/verify_import.py
+set -o pipefail
+env -u GIT_ALTERNATE_OBJECT_DIRECTORIES -u GIT_COMMON_DIR \
+  -u GIT_CONFIG_COUNT -u GIT_CONFIG_PARAMETERS -u GIT_DIR \
+  -u GIT_INDEX_FILE -u GIT_NAMESPACE -u GIT_OBJECT_DIRECTORY \
+  -u GIT_QUARANTINE_PATH -u GIT_REPLACE_REF_BASE -u GIT_SHALLOW_FILE \
+  -u GIT_WORK_TREE GIT_NO_REPLACE_OBJECTS=1 \
+  git -C "$PWD" show HEAD:.kilix-import/verify_import.py | python3 -
+```
+
+Only after that bootstrap passes, run the complete checks:
+
+```sh
+make check
 python3 -m unittest discover -s .kilix-import -p 'test_*.py' -v
 ```
 
