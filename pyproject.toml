@@ -37,5 +37,5 @@ select = ["E9", "F"]
 # The Python distribution is the backend package only; the rest of the tree is
 # the desktop shell and its tooling and is not part of this wheel.
 [tool.setuptools.packages.find]
-include = ["backend*"]
-exclude = ["backend.tests*"]
+include = ["kilix_voicebox_backend*"]
+exclude = ["kilix_voicebox_backend.tests*"]

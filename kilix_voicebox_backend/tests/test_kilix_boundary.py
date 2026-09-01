@@ -22,23 +22,23 @@ from fastapi.testclient import TestClient
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
-from backend import export_import, models, profiles, stories
-from backend.database import (
+from kilix_voicebox_backend import export_import, models, profiles, stories
+from kilix_voicebox_backend.database import (
     Base,
     Generation as DBGeneration,
     ProfileSample as DBProfileSample,
     Story as DBStory,
     StoryItem as DBStoryItem,
 )
-from backend.database import VoiceProfile as DBVoiceProfile
-from backend.main import (
+from kilix_voicebox_backend.database import VoiceProfile as DBVoiceProfile
+from kilix_voicebox_backend.main import (
     _owned_streaming_response,
     _read_bounded_upload,
     app,
     configure_session_token,
     generate_speech,
 )
-from backend.kilix_provider import (
+from kilix_voicebox_backend.kilix_provider import (
     ProviderClient,
     ProviderError,
     QWEN_ENDPOINT,
@@ -49,13 +49,13 @@ from backend.kilix_provider import (
     receive_message,
     send_message,
 )
-from backend.orchestrator import VoiceboxOrchestrator
-from backend.private_store import (
+from kilix_voicebox_backend.orchestrator import VoiceboxOrchestrator
+from kilix_voicebox_backend.private_store import (
     GenerationProvenance,
     PrivateVoiceStore,
     StoreError,
 )
-from backend.utils.audio import MAX_SOURCE_SAMPLES, load_audio, validate_reference_audio
+from kilix_voicebox_backend.utils.audio import MAX_SOURCE_SAMPLES, load_audio, validate_reference_audio
 
 
 def request(schema: str) -> dict:
@@ -87,8 +87,8 @@ class AudioBoundaryTests(unittest.TestCase):
     def test_audio_is_bounded_before_decode(self) -> None:
         info = Mock(samplerate=24_000, channels=1, frames=MAX_SOURCE_SAMPLES + 1)
         with (
-            patch("backend.utils.audio.sf.info", return_value=info),
-            patch("backend.utils.audio.sf.read") as read,
+            patch("kilix_voicebox_backend.utils.audio.sf.info", return_value=info),
+            patch("kilix_voicebox_backend.utils.audio.sf.read") as read,
             self.assertRaisesRegex(ValueError, "^AUDIO_DECODE_BOUND$"),
         ):
             load_audio("oversized.wav")
@@ -124,9 +124,9 @@ class BrowserBoundaryTests(unittest.TestCase):
     def test_product_origins_are_exact(self) -> None:
         with (
             tempfile.TemporaryDirectory() as directory,
-            patch("backend.main.config.get_data_dir", return_value=Path(directory)),
-            patch("backend.main.config.get_privacy_dir", return_value=Path(directory) / "privacy"),
-            patch("backend.main.database.init_db"),
+            patch("kilix_voicebox_backend.main.config.get_data_dir", return_value=Path(directory)),
+            patch("kilix_voicebox_backend.main.config.get_privacy_dir", return_value=Path(directory) / "privacy"),
+            patch("kilix_voicebox_backend.main.database.init_db"),
         ):
             with TestClient(app) as client:
                 allowed = client.get("/", headers={
@@ -144,9 +144,9 @@ class BrowserBoundaryTests(unittest.TestCase):
     def test_remote_shutdown_route_is_absent(self) -> None:
         with (
             tempfile.TemporaryDirectory() as directory,
-            patch("backend.main.config.get_data_dir", return_value=Path(directory)),
-            patch("backend.main.config.get_privacy_dir", return_value=Path(directory) / "privacy"),
-            patch("backend.main.database.init_db"),
+            patch("kilix_voicebox_backend.main.config.get_data_dir", return_value=Path(directory)),
+            patch("kilix_voicebox_backend.main.config.get_privacy_dir", return_value=Path(directory) / "privacy"),
+            patch("kilix_voicebox_backend.main.database.init_db"),
         ):
             with TestClient(app) as client:
                 response = client.post("/shutdown", headers={
@@ -158,9 +158,9 @@ class BrowserBoundaryTests(unittest.TestCase):
     def test_session_credential_is_required(self) -> None:
         with (
             tempfile.TemporaryDirectory() as directory,
-            patch("backend.main.config.get_data_dir", return_value=Path(directory)),
-            patch("backend.main.config.get_privacy_dir", return_value=Path(directory) / "privacy"),
-            patch("backend.main.database.init_db"),
+            patch("kilix_voicebox_backend.main.config.get_data_dir", return_value=Path(directory)),
+            patch("kilix_voicebox_backend.main.config.get_privacy_dir", return_value=Path(directory) / "privacy"),
+            patch("kilix_voicebox_backend.main.database.init_db"),
         ):
             with TestClient(app) as client:
                 response = client.get("/", headers={"Origin": "tauri://localhost"})
@@ -531,7 +531,7 @@ class StoreTests(unittest.TestCase):
                 patch.object(
                     store, "_atomic_record", side_effect=record_with_failed_receipt,
                 ),
-                patch("backend.private_store.os.replace", side_effect=replace_with_failed_restore),
+                patch("kilix_voicebox_backend.private_store.os.replace", side_effect=replace_with_failed_restore),
                 self.assertRaises(StoreError) as caught,
             ):
                 store.trash_owned_paths(
@@ -590,7 +590,7 @@ class StoreTests(unittest.TestCase):
                 patch.object(
                     store, "_atomic_record", side_effect=record_with_failed_receipt,
                 ),
-                patch("backend.private_store.os.replace", side_effect=replace_with_failed_restore),
+                patch("kilix_voicebox_backend.private_store.os.replace", side_effect=replace_with_failed_restore),
                 self.assertRaises(StoreError) as caught,
             ):
                 store.trash_generation("generation-1")
@@ -649,14 +649,14 @@ class ExportImportTests(unittest.TestCase):
             ))
             db.commit()
             with patch(
-                "backend.profiles.config.get_profiles_dir", return_value=profiles_root
+                "kilix_voicebox_backend.profiles.config.get_profiles_dir", return_value=profiles_root
             ):
                 without_samples = export_import.export_profile_to_zip("profile-1", db)
             with zipfile.ZipFile(io.BytesIO(without_samples)) as archive:
                 self.assertEqual(set(archive.namelist()), {"manifest.json", "samples.json"})
                 self.assertEqual(json.loads(archive.read("samples.json")), {})
             with patch(
-                "backend.profiles.config.get_profiles_dir", return_value=profiles_root
+                "kilix_voicebox_backend.profiles.config.get_profiles_dir", return_value=profiles_root
             ):
                 selected = export_import.export_profile_to_zip(
                     "profile-1", db, include_samples=True
@@ -862,7 +862,7 @@ class StoryBoundaryTests(unittest.TestCase):
             ))
             db.commit()
             with (
-                patch("backend.profiles.validate_reference_audio") as validate,
+                patch("kilix_voicebox_backend.profiles.validate_reference_audio") as validate,
                 self.assertRaisesRegex(ValueError, "Exactly one source sample"),
             ):
                 asyncio.run(profiles.add_profile_sample(
@@ -900,7 +900,7 @@ class StoryBoundaryTests(unittest.TestCase):
             item.start_time_ms = models.MAX_STORY_TIMELINE_MS
             db.commit()
             with (
-                patch("backend.stories.np.zeros") as allocate,
+                patch("kilix_voicebox_backend.stories.np.zeros") as allocate,
                 self.assertRaisesRegex(ValueError, "STORY_EXPORT_BOUND"),
             ):
                 asyncio.run(stories.export_story_audio("story-1", db))
@@ -1169,15 +1169,15 @@ class GenerationRouteTests(unittest.TestCase):
             seed=8123, instruct=None, created_at=now,
         )
         with (
-            patch("backend.main.profiles.get_profile", new=AsyncMock(return_value=object())),
+            patch("kilix_voicebox_backend.main.profiles.get_profile", new=AsyncMock(return_value=object())),
             patch(
-                "backend.main.profiles.create_voice_prompt_for_profile",
+                "kilix_voicebox_backend.main.profiles.create_voice_prompt_for_profile",
                 new=AsyncMock(return_value={"audio_path": "/private/sample.wav"}),
             ),
-            patch("backend.main._voice_orchestrator", return_value=orchestrator),
-            patch("backend.main.config.get_privacy_dir", return_value=Path("/private")),
+            patch("kilix_voicebox_backend.main._voice_orchestrator", return_value=orchestrator),
+            patch("kilix_voicebox_backend.main.config.get_privacy_dir", return_value=Path("/private")),
             patch(
-                "backend.main.history.create_generation",
+                "kilix_voicebox_backend.main.history.create_generation",
                 new=AsyncMock(return_value=created),
             ) as create_generation,
         ):

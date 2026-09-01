@@ -26,7 +26,7 @@ install -d -m 700 "$DATA_HOME"
 cd "$REPO_ROOT"
 
 KILIX_VOICEBOX_SESSION_TOKEN="$SESSION_TOKEN" XDG_DATA_HOME="$DATA_HOME" \
-    uv run --frozen uvicorn backend.main:app --uds "$SOCKET_PATH" --no-access-log &
+    uv run --frozen uvicorn kilix_voicebox_backend.main:app --uds "$SOCKET_PATH" --no-access-log &
 BACKEND_PID=$!
 
 for _attempt in {1..30}; do

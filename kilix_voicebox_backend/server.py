@@ -9,8 +9,8 @@ import sys
 
 import uvicorn
 
-from backend import config, database
-from backend.main import app, configure_session_token
+from kilix_voicebox_backend import config, database
+from kilix_voicebox_backend.main import app, configure_session_token
 
 
 logging.basicConfig(

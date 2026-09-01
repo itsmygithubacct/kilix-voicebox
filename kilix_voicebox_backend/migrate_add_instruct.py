@@ -2,7 +2,7 @@
 Database migration script to add instruct column to generations table.
 
 Run this once to update existing databases:
-    python -m backend.migrate_add_instruct
+    python -m kilix_voicebox_backend.migrate_add_instruct
 """
 
 import sqlite3

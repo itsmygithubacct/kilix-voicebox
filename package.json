@@ -10,7 +10,7 @@
   "scripts": {
     "dev": "cd tauri && bun run tauri dev",
     "dev:web": "cd web && bun run dev",
-    "dev:server": "uv run --frozen uvicorn backend.main:app --reload --host 127.0.0.1 --port 17493 --no-access-log",
+    "dev:server": "uv run --frozen uvicorn kilix_voicebox_backend.main:app --reload --host 127.0.0.1 --port 17493 --no-access-log",
     "build": "./scripts/build-server.sh && cd tauri && bun run tauri build",
     "build:web": "cd web && bun run build",
     "generate:api": "./scripts/generate-api.sh",

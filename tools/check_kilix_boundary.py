@@ -10,7 +10,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 ACTIVE_ROOTS = (
-    "backend",
+    "kilix_voicebox_backend",
     "app/src",
     "web/src",
     "tauri/src-tauri/src",
@@ -20,11 +20,11 @@ ACTIVE_ROOTS = (
 )
 SUFFIXES = {".md", ".mdx", ".py", ".ts", ".tsx", ".rs", ".sh", ".toml", ".txt"}
 ABSENT = (
-    "backend/backends/mlx_backend.py",
-    "backend/backends/pytorch_backend.py",
-    "backend/platform_detect.py",
-    "backend/requirements-mlx.txt",
-    "backend/utils/hf_progress.py",
+    "kilix_voicebox_backend/backends/mlx_backend.py",
+    "kilix_voicebox_backend/backends/pytorch_backend.py",
+    "kilix_voicebox_backend/platform_detect.py",
+    "kilix_voicebox_backend/requirements-mlx.txt",
+    "kilix_voicebox_backend/utils/hf_progress.py",
     "app/src/components/ServerSettings/ModelProgress.tsx",
     "app/src/lib/hooks/useModelDownloadToast.tsx",
     "mlx-test/demo.py",
@@ -38,10 +38,10 @@ ABSENT = (
     "docs/AUTOUPDATER_QUICKSTART.md",
     "docs/developer/autoupdater.mdx",
     ".github/workflows/release.yml",
-    "backend/example_usage.py",
-    "backend/studio.py",
-    "backend/utils/progress.py",
-    "backend/utils/tasks.py",
+    "kilix_voicebox_backend/example_usage.py",
+    "kilix_voicebox_backend/studio.py",
+    "kilix_voicebox_backend/utils/progress.py",
+    "kilix_voicebox_backend/utils/tasks.py",
     "docs/plans/DOCKER_DEPLOYMENT.md",
     "docs/plans/EXTERNAL_PROVIDERS.md",
     "docs/plans/MLX_AUDIO.md",
@@ -148,8 +148,8 @@ def main() -> int:
                 unsafe_console_lines.append((path, line_number))
     require(not unsafe_console_lines, "UNSANITIZED_FRONTEND_LOG")
 
-    main_source = (ROOT / "backend/main.py").read_text(encoding="utf-8")
-    model_source = (ROOT / "backend/models.py").read_text(encoding="utf-8")
+    main_source = (ROOT / "kilix_voicebox_backend/main.py").read_text(encoding="utf-8")
+    model_source = (ROOT / "kilix_voicebox_backend/models.py").read_text(encoding="utf-8")
     native_source = (ROOT / "tauri/src-tauri/src/main.rs").read_text(encoding="utf-8")
     client_source = (ROOT / "app/src/lib/api/client.ts").read_text(encoding="utf-8")
     debug_source = (ROOT / "app/src/lib/utils/debug.ts").read_text(encoding="utf-8")
@@ -203,18 +203,18 @@ def main() -> int:
     required = (
         (ROOT / "uv.lock").is_file(),
         (ROOT / "pyproject.toml").is_file(),
-        "127.0.0.1" in (ROOT / "backend/server.py").read_text(encoding="utf-8"),
-        "SO_PEERCRED" in (ROOT / "backend/kilix_provider.py").read_text(encoding="utf-8"),
-        "SOCK_SEQPACKET" in (ROOT / "backend/kilix_provider.py").read_text(encoding="utf-8"),
-        "consent_asserted" in (ROOT / "backend/models.py").read_text(encoding="utf-8"),
+        "127.0.0.1" in (ROOT / "kilix_voicebox_backend/server.py").read_text(encoding="utf-8"),
+        "SO_PEERCRED" in (ROOT / "kilix_voicebox_backend/kilix_provider.py").read_text(encoding="utf-8"),
+        "SOCK_SEQPACKET" in (ROOT / "kilix_voicebox_backend/kilix_provider.py").read_text(encoding="utf-8"),
+        "consent_asserted" in (ROOT / "kilix_voicebox_backend/models.py").read_text(encoding="utf-8"),
         "consentAsserted" in (ROOT / "app/src/lib/hooks/useGenerationForm.ts").read_text(
             encoding="utf-8"
         ),
-        "include_samples: bool = False" in (ROOT / "backend/main.py").read_text(
+        "include_samples: bool = False" in (ROOT / "kilix_voicebox_backend/main.py").read_text(
             encoding="utf-8"
         ),
-        "delete-preview" in (ROOT / "backend/main.py").read_text(encoding="utf-8"),
-        "sidecar-provenance" in (ROOT / "backend/build_binary.py").read_text(encoding="utf-8"),
+        "delete-preview" in (ROOT / "kilix_voicebox_backend/main.py").read_text(encoding="utf-8"),
+        "sidecar-provenance" in (ROOT / "kilix_voicebox_backend/build_binary.py").read_text(encoding="utf-8"),
         "detail=str(" not in main_source,
         model_source.count("Expose a loopback API resource") == 5,
         "Mutex<Option<OwnedServer>>" in native_source,
@@ -233,13 +233,13 @@ def main() -> int:
         '@app.post("/history/import")' not in main_source,
         '@app.post("/models/download")' not in main_source,
         '@app.post("/models/load")' not in main_source,
-        'generation_provenance' in (ROOT / "backend/private_store.py").read_text(
+        'generation_provenance' in (ROOT / "kilix_voicebox_backend/private_store.py").read_text(
             encoding="utf-8"
         ),
-        'preview_owned_delete' in (ROOT / "backend/private_store.py").read_text(
+        'preview_owned_delete' in (ROOT / "kilix_voicebox_backend/private_store.py").read_text(
             encoding="utf-8"
         ),
-        'archive_records' in (ROOT / "backend/private_store.py").read_text(
+        'archive_records' in (ROOT / "kilix_voicebox_backend/private_store.py").read_text(
             encoding="utf-8"
         ),
         '@app.get("/stories/{story_id}/delete-preview")' in main_source,
@@ -250,7 +250,7 @@ def main() -> int:
         'SESSION_UNAUTHORIZED' in main_source,
         'OsRng' in native_source,
         '.env("KILIX_VOICEBOX_SESSION_TOKEN"' in native_source,
-        'access_log=False' in (ROOT / "backend/server.py").read_text(encoding="utf-8"),
+        'access_log=False' in (ROOT / "kilix_voicebox_backend/server.py").read_text(encoding="utf-8"),
         "[redacted]" in debug_source,
         "safeArguments(args)" in debug_source,
         not generated_client_uses,

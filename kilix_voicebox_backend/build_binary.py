@@ -29,47 +29,47 @@ def _git_identity(name: str) -> str:
 
 def build_server() -> None:
     hidden = (
-        "backend",
-        "backend.main",
-        "backend.config",
-        "backend.database",
-        "backend.models",
-        "backend.profiles",
-        "backend.history",
-        "backend.tts",
-        "backend.transcribe",
-        "backend.kilix_provider",
-        "backend.orchestrator",
-        "backend.private_store",
-        "backend.utils.audio",
-        "backend.utils.cache",
-        "backend.utils.validation",
+        "kilix_voicebox_backend",
+        "kilix_voicebox_backend.main",
+        "kilix_voicebox_backend.config",
+        "kilix_voicebox_backend.database",
+        "kilix_voicebox_backend.models",
+        "kilix_voicebox_backend.profiles",
+        "kilix_voicebox_backend.history",
+        "kilix_voicebox_backend.tts",
+        "kilix_voicebox_backend.transcribe",
+        "kilix_voicebox_backend.kilix_provider",
+        "kilix_voicebox_backend.orchestrator",
+        "kilix_voicebox_backend.private_store",
+        "kilix_voicebox_backend.utils.audio",
+        "kilix_voicebox_backend.utils.cache",
+        "kilix_voicebox_backend.utils.validation",
         "fastapi",
         "uvicorn",
         "sqlalchemy",
         "soundfile",
     )
     arguments = [
-        str(ROOT / "backend" / "server.py"),
+        str(ROOT / "kilix_voicebox_backend" / "server.py"),
         "--onefile",
         "--name",
         "voicebox-server",
         "--paths",
         str(ROOT),
         "--distpath",
-        str(ROOT / "backend" / "dist"),
+        str(ROOT / "kilix_voicebox_backend" / "dist"),
         "--workpath",
-        str(ROOT / "backend" / "build"),
+        str(ROOT / "kilix_voicebox_backend" / "build"),
         "--specpath",
-        str(ROOT / "backend" / "build"),
+        str(ROOT / "kilix_voicebox_backend" / "build"),
         "--noconfirm",
         "--clean",
     ]
     for module in hidden:
         arguments.extend(("--hidden-import", module))
     PyInstaller.__main__.run(arguments)
-    suffix = ".exe" if (ROOT / "backend" / "dist" / "voicebox-server.exe").is_file() else ""
-    binary = ROOT / "backend" / "dist" / f"voicebox-server{suffix}"
+    suffix = ".exe" if (ROOT / "kilix_voicebox_backend" / "dist" / "voicebox-server.exe").is_file() else ""
+    binary = ROOT / "kilix_voicebox_backend" / "dist" / f"voicebox-server{suffix}"
     manifest = {
         "schema": "kilix.voicebox.sidecar-provenance/candidate-v1",
         "source_commit": _git_identity("HEAD"),
@@ -80,7 +80,7 @@ def build_server() -> None:
         "contains_model_runtime": False,
         "provider_endpoints": ["kilix-qwen-tts.sock", "kilix-transcribe.sock"],
     }
-    destination = ROOT / "backend" / "dist" / "voicebox-server.provenance.json"
+    destination = ROOT / "kilix_voicebox_backend" / "dist" / "voicebox-server.provenance.json"
     destination.write_text(
         json.dumps(manifest, separators=(",", ":"), sort_keys=True) + "\n",
         encoding="utf-8",

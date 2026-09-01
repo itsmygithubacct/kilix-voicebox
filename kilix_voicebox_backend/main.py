@@ -1353,7 +1353,7 @@ if __name__ == "__main__":
         parser.error("KILIX_VOICEBOX_SESSION_TOKEN is required")
     configure_session_token(token)
     uvicorn.run(
-        "backend.main:app",
+        "kilix_voicebox_backend.main:app",
         host="127.0.0.1",
         port=args.port,
         reload=False,

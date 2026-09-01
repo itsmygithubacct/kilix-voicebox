@@ -5,7 +5,7 @@ SHELL := /bin/bash
 .DEFAULT_GOAL := help
 
 # Directories
-BACKEND_DIR := backend
+BACKEND_DIR := kilix_voicebox_backend
 TAURI_DIR := tauri
 WEB_DIR := web
 APP_DIR := app
@@ -80,7 +80,7 @@ dev-backend: ## Start FastAPI backend server
 		echo "Set KILIX_VOICEBOX_SESSION_TOKEN to 32 random bytes in lowercase hex"; \
 		exit 1; \
 	}
-	uv run --frozen uvicorn backend.main:app --reload --host 127.0.0.1 --port 17493 --no-access-log
+	uv run --frozen uvicorn kilix_voicebox_backend.main:app --reload --host 127.0.0.1 --port 17493 --no-access-log
 
 dev-frontend: ## Start Tauri desktop app
 	@echo -e "$(BLUE)Starting Tauri desktop app...$(NC)"
