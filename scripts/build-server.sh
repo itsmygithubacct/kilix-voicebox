@@ -29,7 +29,7 @@ env -i \
     PYTHONNOUSERSITE=1 \
     PYTHONSAFEPATH=1 \
     uv --no-config run --frozen --isolated --no-default-groups --group build \
-        python -I backend/build_binary.py
+        python -I kilix_voicebox_backend/build_binary.py
 
 # Create binaries directory if it doesn't exist
 mkdir -p tauri/src-tauri/binaries

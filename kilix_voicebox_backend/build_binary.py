@@ -7,7 +7,6 @@ import json
 from pathlib import Path
 import subprocess
 
-import PyInstaller.__main__
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -67,6 +66,12 @@ def build_server() -> None:
     ]
     for module in hidden:
         arguments.extend(("--hidden-import", module))
+    # Imported at point of use: PyInstaller is in the `build` dependency group,
+    # not in [project.dependencies], and this module ships in the runtime wheel.
+    # A module-level import made `import kilix_voicebox_backend.build_binary`
+    # fail with ModuleNotFoundError for anyone who installed the wheel normally.
+    import PyInstaller.__main__
+
     PyInstaller.__main__.run(arguments)
     suffix = ".exe" if (ROOT / "kilix_voicebox_backend" / "dist" / "voicebox-server.exe").is_file() else ""
     binary = ROOT / "kilix_voicebox_backend" / "dist" / f"voicebox-server{suffix}"
