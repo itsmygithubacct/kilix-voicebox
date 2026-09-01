@@ -9,6 +9,7 @@ BACKEND_DIR := kilix_voicebox_backend
 TAURI_DIR := tauri
 WEB_DIR := web
 APP_DIR := app
+BACKEND_PKG := kilix_voicebox_backend
 BUN ?= bun
 
 # Python dependencies are resolved only by the committed uv lock.
@@ -171,9 +172,31 @@ check-kilix: ## Verify the provider-only Voicebox boundary
 	uv run --frozen --isolated python -I tools/check_import_inventory.py
 
 check-backend: check-kilix ## Run backend compile and unit controls
-	uv run --frozen --isolated python -I -m compileall -q backend
-	uv run --frozen --isolated --group dev ruff check backend tools
-	uv run --frozen --isolated --group dev python -I -m unittest discover -s backend/tests -t . -p 'test_*.py' -v
+	@$(MAKE) --no-print-directory assert-backend-sources
+	uv run --frozen --isolated python -I -m compileall -q $(BACKEND_PKG)
+	uv run --frozen --isolated --group dev ruff check $(BACKEND_PKG) tools
+	uv run --frozen --isolated --group dev python -I -m unittest discover -s $(BACKEND_PKG)/tests -t . -p 'test_*.py' -v
+
+# `compileall` and `unittest discover` both exit 0 on a directory that does not
+# exist -- so when the package was renamed away from `backend`, the compile
+# control silently became a no-op that reported success, and only ruff's E902
+# revealed it. This asserts the thing those controls assume, and prints the
+# denominator it is asserting over, so an empty or missing package fails here
+# instead of passing downstream.
+.PHONY: assert-backend-sources
+assert-backend-sources:
+	@test -d "$(BACKEND_PKG)" || { \
+		printf 'FAIL package directory does not exist: %s\n' "$(BACKEND_PKG)" >&2; exit 1; }
+	@test -d "$(BACKEND_PKG)/tests" || { \
+		printf 'FAIL test directory does not exist: %s/tests\n' "$(BACKEND_PKG)" >&2; exit 1; }
+	@sources=$$(find "$(BACKEND_PKG)" -name '*.py' -type f | wc -l); \
+	tests=$$(find "$(BACKEND_PKG)/tests" -name 'test_*.py' -type f | wc -l); \
+	test "$$sources" -gt 0 || { \
+		printf 'FAIL no Python sources under %s\n' "$(BACKEND_PKG)" >&2; exit 1; }; \
+	test "$$tests" -gt 0 || { \
+		printf 'FAIL no test modules under %s/tests\n' "$(BACKEND_PKG)" >&2; exit 1; }; \
+	printf 'BACKEND_SOURCES_PRESENT (package %s; sources %s; test modules %s)\n' \
+		"$(BACKEND_PKG)" "$$sources" "$$tests"
 
 check-frontend: ## Run deterministic frontend lint and type controls
 	$(BUN) run --cwd $(APP_DIR) lint
@@ -195,8 +218,9 @@ test: test-backend test-frontend ## Run all tests
 
 test-backend: ## Run Python backend tests (requires pytest)
 	@echo -e "$(BLUE)Running backend tests...$(NC)"
+	@$(MAKE) --no-print-directory assert-backend-sources
 	uv run --frozen --isolated --group dev python -I -m unittest discover \
-		-s backend/tests -t . -p 'test_*.py' -v
+		-s $(BACKEND_PKG)/tests -t . -p 'test_*.py' -v
 
 test-frontend: ## Run frontend tests (requires test script in package.json)
 	@echo -e "$(BLUE)Running frontend tests...$(NC)"
