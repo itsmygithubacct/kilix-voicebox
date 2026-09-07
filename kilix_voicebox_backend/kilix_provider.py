@@ -113,23 +113,24 @@ def _utf8_size(value: str) -> int:
         raise ProviderError("INVALID_RESPONSE") from error
 
 
-def _validate_structure(value: Any) -> None:
+def _validate_structure(value: Any, *, maximum_bytes: int = MAX_CONTROL_BYTES,
+                        maximum_nodes: int = MAX_NODES) -> None:
     nodes = 0
     scalar_bytes = 0
     stack: list[tuple[Any, int]] = [(value, 1)]
     while stack:
         current, depth = stack.pop()
         nodes += 1
-        _require(nodes <= MAX_NODES and depth <= MAX_DEPTH, "LIMIT_EXCEEDED")
+        _require(nodes <= maximum_nodes and depth <= MAX_DEPTH, "LIMIT_EXCEEDED")
         if isinstance(current, dict):
-            _require(nodes + len(stack) + len(current) <= MAX_NODES, "LIMIT_EXCEEDED")
+            _require(nodes + len(stack) + len(current) <= maximum_nodes, "LIMIT_EXCEEDED")
             for key, child in current.items():
                 _require(type(key) is str and _utf8_size(key) <= MAX_KEY_BYTES,
                          "INVALID_RESPONSE")
                 scalar_bytes += _utf8_size(key)
                 stack.append((child, depth + 1))
         elif isinstance(current, list):
-            _require(nodes + len(stack) + len(current) <= MAX_NODES, "LIMIT_EXCEEDED")
+            _require(nodes + len(stack) + len(current) <= maximum_nodes, "LIMIT_EXCEEDED")
             stack.extend((child, depth + 1) for child in current)
         elif type(current) is int:
             _require(current.bit_length() <= MAX_INTEGER_BITS, "LIMIT_EXCEEDED")
@@ -142,7 +143,7 @@ def _validate_structure(value: Any) -> None:
         else:
             _require(current is None or type(current) is bool, "INVALID_RESPONSE")
             scalar_bytes += 4
-        _require(scalar_bytes <= MAX_CONTROL_BYTES, "LIMIT_EXCEEDED")
+        _require(scalar_bytes <= maximum_bytes, "LIMIT_EXCEEDED")
 
 
 def encode_message(value: dict[str, Any]) -> bytes:
@@ -168,6 +169,14 @@ def decode_message(packet: bytes) -> dict[str, Any]:
     payload = packet[_HEADER.size:]
     _require(declared == len(payload) and 0 < declared <= MAX_CONTROL_BYTES,
              "INVALID_RESPONSE")
+    return decode_document(payload)
+
+
+def decode_document(payload: bytes, *, maximum_bytes: int = MAX_CONTROL_BYTES,
+                    maximum_nodes: int = MAX_NODES) -> dict[str, Any]:
+    """Strict JSON for control packets or explicitly bounded result descriptors."""
+    _require(type(payload) is bytes and 0 < len(payload) <= maximum_bytes,
+             "LIMIT_EXCEEDED")
     try:
         text = payload.decode("utf-8", errors="strict")
     except UnicodeDecodeError as error:
@@ -186,7 +195,7 @@ def decode_message(packet: bytes) -> dict[str, Any]:
     except (json.JSONDecodeError, RecursionError, ValueError) as error:
         raise ProviderError("INVALID_RESPONSE") from error
     _require(type(value) is dict, "INVALID_RESPONSE")
-    _validate_structure(value)
+    _validate_structure(value, maximum_bytes=maximum_bytes, maximum_nodes=maximum_nodes)
     return value
 
 
@@ -217,6 +226,7 @@ def receive_message(channel: socket.socket) -> tuple[dict[str, Any], tuple[int, 
         packet, ancillary, flags, _address = channel.recvmsg(
             MAX_CONTROL_BYTES + _HEADER.size,
             socket.CMSG_SPACE(array.array("i").itemsize),
+            getattr(socket, "MSG_CMSG_CLOEXEC", 0),
         )
     except (OSError, TimeoutError) as error:
         raise ProviderError("PROVIDER_UNAVAILABLE") from error

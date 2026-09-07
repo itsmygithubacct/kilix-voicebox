@@ -29,6 +29,9 @@ kilix-qwen-tts       kilix-transcribe
 - Provider endpoints are fixed names below a private `0700` runtime directory.
 - Linux peer credentials must match the current UID; sockets must be `0600`.
 - Provider messages are length-, depth-, key-, string-, number-, and FD-bounded.
+- Transcripts may use a read-only result descriptor, limited to 16 MiB and
+  verified against its size, SHA-256, and model identity. They are returned
+  directly without adding them to the generation store.
 - Voicebox never imports provider runtimes or performs a second inference path.
 - Synthesis requires an explicit consent assertion bound to the canonical PCM
   digest and original sample-container digest.

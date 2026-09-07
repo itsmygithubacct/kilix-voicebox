@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+import fcntl
 import io
 import os
 import secrets
@@ -13,7 +14,7 @@ import wave
 from pathlib import Path
 from typing import Any
 
-from .kilix_provider import ProviderClient, ProviderError, ProviderReply
+from .kilix_provider import ProviderClient, ProviderError, ProviderReply, decode_document
 from .private_store import (
     MAX_SAMPLE_BYTES,
     GenerationProvenance,
@@ -25,6 +26,49 @@ from .private_store import (
 
 MAX_TEXT_BYTES = 16_384
 MAX_INSTRUCTION_BYTES = 4_096
+MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024
+
+
+def _transcript_result(reply: ProviderReply) -> dict[str, Any]:
+    _require(reply.payload.get("type") == "result", "INVALID_RESPONSE")
+    result = reply.payload.get("result")
+    _require(type(result) is dict, "INVALID_RESPONSE")
+    if "transcript" not in result:
+        # The earlier candidate returned short inline results. Its control
+        # decoder has already enforced the smaller packet/structure bounds.
+        _require(not reply.descriptors, "DESCRIPTOR_MISMATCH")
+        return result
+    metadata = result["transcript"]
+    _require(type(metadata) is dict and set(metadata) == {"fd", "byte_length", "sha256"},
+             "INVALID_RESPONSE")
+    _require(len(reply.descriptors) == 1 and type(metadata["fd"]) is int
+             and metadata["fd"] == 0, "DESCRIPTOR_MISMATCH")
+    size = metadata["byte_length"]
+    digest = metadata["sha256"]
+    _require(type(size) is int and 0 < size <= MAX_TRANSCRIPT_BYTES, "LIMIT_EXCEEDED")
+    _require(type(digest) is str and len(digest) == 64
+             and all(c in "0123456789abcdef" for c in digest), "INVALID_RESPONSE")
+    descriptor = reply.descriptors[0]
+    info = os.fstat(descriptor)
+    _require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+             and info.st_size == size, "DESCRIPTOR_MISMATCH")
+    _require(fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY,
+             "DESCRIPTOR_MISMATCH")
+    payload = os.pread(descriptor, size + 1, 0)
+    _require(len(payload) == size and hashlib.sha256(payload).hexdigest() == digest,
+             "DESCRIPTOR_MISMATCH")
+    document = decode_document(payload, maximum_bytes=MAX_TRANSCRIPT_BYTES,
+                               maximum_nodes=1_000_000)
+    for field in ("model_revision", "duration_ms"):
+        _require(field in result and document.get(field) == result[field], "INVALID_RESPONSE")
+    for object_name in ("engine", "model"):
+        identity = document.get(object_name)
+        _require(type(identity) is dict and type(identity.get("id")) is str
+                 and identity["id"] == result.get(f"{object_name}_id"), "INVALID_RESPONSE")
+    _require(type(document.get("text")) is str and type(document.get("segments")) is list
+             and document.get("output_format") in {"text", "json", "webvtt", "srt"}
+             and type(document.get("output")) is str, "INVALID_RESPONSE")
+    return document
 
 
 def _require(condition: bool, code: str) -> None:
@@ -339,8 +383,4 @@ class VoiceboxOrchestrator:
         finally:
             os.close(descriptor)
         with reply:
-            _require(reply.payload.get("type") == "result", "INVALID_RESPONSE")
-            _require(len(reply.descriptors) == 0, "DESCRIPTOR_MISMATCH")
-            result = reply.payload.get("result")
-            _require(type(result) is dict, "INVALID_RESPONSE")
-            return result
+            return _transcript_result(reply)
