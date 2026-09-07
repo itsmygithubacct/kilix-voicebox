@@ -52,6 +52,17 @@ class TranscriptDescriptorTests(unittest.TestCase):
                 _transcript_result(reply)
             self.assertEqual(caught.exception.code, "INVALID_RESPONSE")
 
+    def test_malformed_field_types_refuse_without_raw_exceptions(self):
+        for name, value in (("output_format", []), ("output_format", {}),
+                            ("text", []), ("segments", None), ("engine", []),
+                            ("model", None), ("duration_ms", {})):
+            with self.subTest(name=name, value=value):
+                document = self.document()
+                document[name] = value
+                with self.reply(json.dumps(document).encode()) as reply:
+                    with self.assertRaises(ProviderError):
+                        _transcript_result(reply)
+
     def test_duplicate_keys_nonfinite_and_deep_json_refuse(self):
         for payload in (b'{"key":1,"key":2}', b'{"key":NaN}',
                         b'{"key":' + b'[' * 17 + b'0' + b']' * 17 + b'}'):

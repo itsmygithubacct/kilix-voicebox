@@ -66,7 +66,8 @@ def _transcript_result(reply: ProviderReply) -> dict[str, Any]:
         _require(type(identity) is dict and type(identity.get("id")) is str
                  and identity["id"] == result.get(f"{object_name}_id"), "INVALID_RESPONSE")
     _require(type(document.get("text")) is str and type(document.get("segments")) is list
-             and document.get("output_format") in {"text", "json", "webvtt", "srt"}
+             and type(document.get("output_format")) is str
+             and document["output_format"] in {"text", "json", "webvtt", "srt"}
              and type(document.get("output")) is str, "INVALID_RESPONSE")
     return document
 
