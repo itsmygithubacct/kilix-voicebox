@@ -5,7 +5,7 @@
   "identifier": "sh.voicebox.app",
   "build": {
     "beforeDevCommand": "bun run dev",
-    "beforeBuildCommand": "bun run build",
+    "beforeBuildCommand": "sh -euc 'root=$PWD; while [ ! -f \"$root/tools/tauri_build_gate.py\" ]; do if [ \"$root\" = / ]; then echo \"voicebox: sidecar gate not found\" >&2; exit 1; fi; root=$(dirname \"$root\"); done; python3 -I \"$root/tools/tauri_build_gate.py\" && bun run build'",
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173"
   },
@@ -14,6 +14,12 @@
     "targets": "all",
     "createUpdaterArtifacts": false,
     "externalBin": ["binaries/voicebox-server"],
+    "resources": {
+      "resources/sidecar/RESOURCES.json": "sidecar/RESOURCES.json",
+      "resources/sidecar/licenses/kilix-transcribe/LICENSE": "sidecar/licenses/kilix-transcribe/LICENSE",
+      "resources/sidecar/licenses/kilix-voice/LICENSE": "sidecar/licenses/kilix-voice/LICENSE",
+      "resources/sidecar/voicebox-server.provenance.json": "sidecar/voicebox-server.provenance.json"
+    },
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",

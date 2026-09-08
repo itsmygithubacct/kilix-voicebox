@@ -98,16 +98,33 @@ dev-web: ## Start backend + web app (parallel)
 # BUILD
 # =============================================================================
 
-.PHONY: build build-server build-tauri build-web
+.PHONY: build build-server build-tauri build-web sidecar-gate
 
-build: build-server build-tauri ## Build everything (server binary + desktop app)
+# `build-server` publishes the sidecar and `build-tauri` packages it, so they
+# were never independent: as plain prerequisites `make -j build` could package
+# while publication was still in flight. They are separate serial sub-makes
+# here, and the Tauri build hook independently refuses to reach a package step
+# without a passing sidecar gate, so no route can package a sidecar this build
+# did not publish and verify.
+build: ## Build everything (server binary + desktop app)
+	@$(MAKE) --no-print-directory build-server
+	@$(MAKE) --no-print-directory build-tauri
 	@echo -e "$(GREEN)✓ Build complete!$(NC)"
 
 build-server: ## Build Python server binary
 	@echo -e "$(BLUE)Building server binary...$(NC)"
 	PATH="$(VENV_BIN):$$PATH" ./scripts/build-server.sh
 
-build-tauri: ## Build Tauri desktop app
+# The same gate the Tauri build hook runs, exposed for operators and controls.
+# It verifies the installed sidecar identity and prepares the bundle resources;
+# it never invokes the producer, so running it costs no rebuild.
+sidecar-gate: ## Verify the installed sidecar identity and prepare Tauri resources
+	@echo -e "$(BLUE)Verifying the installed sidecar identity...$(NC)"
+	$(PYTHON) -I tools/tauri_build_gate.py
+
+# `bun run tauri build` runs the configured build hook, which is that gate, so
+# this target reaches it exactly once rather than duplicating the work.
+build-tauri: ## Build Tauri desktop app (gated by the sidecar hook)
 	@echo -e "$(BLUE)Building Tauri desktop app...$(NC)"
 	cd $(TAURI_DIR) && bun run tauri build
 

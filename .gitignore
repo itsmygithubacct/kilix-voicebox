@@ -54,6 +54,12 @@ logs/
 app/openapi.json
 tauri/src-tauri/binaries/*
 tauri/src-tauri/gen/Assets.car
+# Prepared by tools/prepare_sidecar_resources.py from a verified build; the
+# retained directory holds an earlier complete set a failed preparation moved
+# aside, and neither is a source input.
+tauri/src-tauri/resources/sidecar/
+tauri/src-tauri/resources/.retained/
+tauri/src-tauri/resources/.staging-*
 
 # Temporary
 tmp/
