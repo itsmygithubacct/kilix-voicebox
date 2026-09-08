@@ -70,8 +70,11 @@ class CaptureHTTPTests(unittest.TestCase):
         started = time.monotonic()
         def ready():
             if self.server.poll() is not None:
-                self.log.seek(0)
-                self.fail(self.log.read().decode())
+                # F1: the early-exit failure message surfaces the same bytes the
+                # retained record does, so it goes through the same bounded,
+                # redacting reader. A failure message is what gets pasted into a
+                # report, so it is the louder of the two paths, not the safer.
+                self.fail(self.read_server_log().decode('utf-8', 'replace'))
             try:
                 status = self.request('/recording/status')[0]
             except OSError as error:
@@ -88,7 +91,22 @@ class CaptureHTTPTests(unittest.TestCase):
             # Keep what this failure actually saw. The exception is re-raised
             # unchanged: nothing is suppressed, converted or retried.
             self.readiness['seconds'] = time.monotonic() - started
-            self._retain_readiness_context()
+            # F2: secondary diagnostics are best effort and must never displace
+            # the failure they exist to explain. The helper is written not to
+            # raise, and this guard is the second line of that promise: a
+            # fallback may fail too, and it must not win either. What happened
+            # is recorded rather than hidden.
+            try:
+                self.readiness['diagnostics'] = self._retain_readiness_context()
+            except BaseException as error:
+                self.readiness['diagnostics'] = {
+                    'written': False, 'error': type(error).__name__,
+                    'stage': 'retain_readiness_context'}
+                try:
+                    print('readiness diagnostics failed: %s' % type(error).__name__,
+                          file=sys.stderr)
+                except BaseException:
+                    pass
             raise
         self.readiness['seconds'] = time.monotonic() - started
         self.setup_complete = True
@@ -155,39 +173,75 @@ class CaptureHTTPTests(unittest.TestCase):
         if self.setup_complete:
             self.assertEqual(after, self.fd_before)
 
-    def _retain_readiness_context(self):
-        """Write one bounded, token-free record of what the failure saw."""
+    def read_server_log(self, limit=MAX_LOG_BYTES):
+        """The server log, bounded and token-redacted, for every caller.
+
+        F1: the failure message and the retained record surface the same bytes,
+        so the bound and the redaction belong to the log itself rather than to
+        one of its readers. Slightly more than the bound is read and redacted
+        before trimming, so a token lying across the boundary is still removed.
+        Arbitrary bytes are returned as bytes; callers decode with `replace`.
+        """
+        marker = self.token.encode('ascii')
         try:
             self.log.seek(0)
-            log_bytes = self.log.read(MAX_LOG_BYTES)
+            data = self.log.read(limit + len(marker))
         except (OSError, ValueError):
-            log_bytes = b''
-        # The session token is in the child's environment and could be echoed.
-        redacted = log_bytes.replace(self.token.encode(), b'<redacted-session-token>')
-        context = {
-            'test': self.id(),
-            'readiness_limit_seconds': self.readiness['limit_seconds'],
-            'readiness_seconds': round(self.readiness['seconds'], 6),
-            'request_attempts': self.readiness['attempts'][-64:],
-            'request_attempt_count': len(self.readiness['attempts']),
-            'server_pid': self.server.pid,
-            'server_returncode': self.server.poll(),
-            'server_alive': self.server.poll() is None,
-            'owned_descendants': self._owned_descendants(),
-            'port': self.port,
-            'server_log_bytes': len(log_bytes),
-            'server_log': redacted.decode('utf-8', 'replace'),
-            'descriptors_at_setup_start': self.fd_before,
-            'descriptors_now': len(os.listdir('/proc/self/fd')),
-        }
-        directory = DIAGNOSTIC_DIR or tempfile.mkdtemp(prefix='c24-http-readiness-')
-        os.makedirs(directory, exist_ok=True)
-        name = self.id().rsplit('.', 1)[-1]
-        path = Path(directory) / f'readiness-{name}-{os.getpid()}.json'
-        path.write_text(json.dumps(context, indent=2, sort_keys=True) + '\n',
-                        encoding='utf-8')
-        self.readiness_context_path = path
-        print(f'retained readiness diagnostics: {path}', file=sys.stderr)
+            return b''
+        return data.replace(marker, b'<redacted-session-token>')[:limit]
+
+    def _retain_readiness_context(self):
+        """Best effort: write one bounded, token-free record. Never raises.
+
+        F2: this runs while the real setup failure is in flight, so every step
+        is guarded and the return value reports honestly what was achieved. A
+        caller must be able to ignore the result without losing its exception.
+        """
+        status = {'written': False}
+        try:
+            log_bytes = self.read_server_log()
+            try:
+                descendants = self._owned_descendants()
+            except BaseException as error:
+                descendants = None
+                status['descendants_error'] = type(error).__name__
+            context = {
+                'test': self.id(),
+                'readiness_limit_seconds': self.readiness['limit_seconds'],
+                'readiness_seconds': round(self.readiness['seconds'], 6),
+                'request_attempts': self.readiness['attempts'][-64:],
+                'request_attempt_count': len(self.readiness['attempts']),
+                'server_pid': self.server.pid,
+                'server_returncode': self.server.poll(),
+                'server_alive': self.server.poll() is None,
+                'owned_descendants': descendants,
+                'port': self.port,
+                'server_log_bytes': len(log_bytes),
+                'server_log': log_bytes.decode('utf-8', 'replace'),
+                'descriptors_at_setup_start': self.fd_before,
+                'descriptors_now': len(os.listdir('/proc/self/fd')),
+            }
+            payload = json.dumps(context, indent=2, sort_keys=True, default=repr) + '\n'
+            directory = DIAGNOSTIC_DIR or tempfile.mkdtemp(prefix='c24-http-readiness-')
+            os.makedirs(directory, exist_ok=True)
+            name = self.id().rsplit('.', 1)[-1]
+            path = Path(directory) / f'readiness-{name}-{os.getpid()}.json'
+            path.write_text(payload, encoding='utf-8')
+            self.readiness_context_path = path
+            status.update(written=True, path=str(path))
+        except BaseException as error:
+            status.update(written=False, error=type(error).__name__)
+        # Even saying so is best effort; a failing stream must not win either.
+        try:
+            if status['written']:
+                print('retained readiness diagnostics: %s' % status['path'],
+                      file=sys.stderr)
+            else:
+                print('readiness diagnostics not retained: %s'
+                      % status.get('error', 'unknown'), file=sys.stderr)
+        except BaseException as error:
+            status['report_error'] = type(error).__name__
+        return status
 
     def request(self, path, *, method='GET', token=True, origin=None):
         connection = http.client.HTTPConnection('127.0.0.1', self.port, timeout=2)
