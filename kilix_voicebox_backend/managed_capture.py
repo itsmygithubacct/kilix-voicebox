@@ -102,7 +102,13 @@ async def until_disconnected(request, function, gone: threading.Event, *, pendin
             task.cancel()
         while not owned.settled() or (task is not None and not task.done()):
             try:
-                await asyncio.sleep(0.01)
+                try:
+                    await asyncio.sleep(0.01)
+                except MemoryError:
+                    # One recoverable wait allocation does not prove return.
+                    # Retry the timed wait once, without an immediate-spin
+                    # fallback if allocation remains unavailable.
+                    await asyncio.sleep(0.01)
             except asyncio.CancelledError:
                 gone.set()
                 continue

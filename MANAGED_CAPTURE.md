@@ -65,6 +65,15 @@ pending claim. Successful operation completion does not mark its HTTP receiver
 disconnected. Task cancellation or actual disconnection still signals loss and
 awaits the owned operation before releasing its claim.
 
+If a cleanup wait's future allocation raises `MemoryError`, the shared waiter
+retries that timed wait once. The same entered callable must finish even if
+Voice has already reaped every recorder process; cancellation of its future
+does not prove callable return. Repeated task cancellation still signals the
+original request's loss and retains this wait. The retry neither renews the
+operation deadline nor adds an executor, thread or immediate-spin fallback.
+This handles a recoverable allocation failure; recovery from persistent
+allocation failure or system-wide memory exhaustion is not established.
+
 Voice's actual logind adapter caches answers for up to 100 ms and bounds each
 query to 150 ms. Rechecking the same adapter retains that declared behavior;
 synthetic boundary tests do not establish instantaneous physical-lock detection.
