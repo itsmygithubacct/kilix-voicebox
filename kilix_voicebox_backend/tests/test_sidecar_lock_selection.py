@@ -12,8 +12,12 @@ import tempfile
 import tomllib
 import unittest
 
-from test_sidecar_gate import Fixture, ROOT, UV_LOCK, MANIFEST, BUILD_ID
-from test_sidecar_gate import SOURCE_COMMIT, SOURCE_TREE, canonical, sha, snapshot_row, verify
+if __package__:
+    from .test_sidecar_gate import Fixture, ROOT, UV_LOCK, MANIFEST, BUILD_ID
+    from .test_sidecar_gate import SOURCE_COMMIT, SOURCE_TREE, canonical, sha, snapshot_row, verify
+else:
+    from test_sidecar_gate import Fixture, ROOT, UV_LOCK, MANIFEST, BUILD_ID
+    from test_sidecar_gate import SOURCE_COMMIT, SOURCE_TREE, canonical, sha, snapshot_row, verify
 
 
 TARGET = {

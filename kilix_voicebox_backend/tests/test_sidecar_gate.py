@@ -56,7 +56,7 @@ def snapshot_row(path, data, mode='0600'):
 
 
 class Fixture:
-    """A compliant candidate-v2 record built from the real input manifest."""
+    """A compliant candidate-v3 record built from the real input manifest."""
 
     def __init__(self):
         self.manifest_bytes = MANIFEST.read_bytes()
@@ -75,7 +75,7 @@ class Fixture:
         modes = {key + '/' + member['path']: member['output_mode']
                  for key, spec in manifest['sources'].items() for member in spec['members']}
         completion = {
-            'schema': 'kilix.voicebox.sidecar-stage/v1',
+            'schema': 'kilix.voicebox.sidecar-stage/v2',
             'input_manifest_sha256': sha(self.manifest_bytes),
             'sources': {key: {k: spec[k] for k in ('repository', 'commit', 'tree')}
                         for key, spec in manifest['sources'].items()},
@@ -238,7 +238,7 @@ class ProvenanceContractTests(unittest.TestCase):
         self.refuses(downgrade, 'no downgrade')
 
         def future(record):
-            record['schema'] = 'kilix.voicebox.sidecar-provenance/candidate-v3'
+            record['schema'] = 'kilix.voicebox.sidecar-provenance/candidate-v4'
         self.refuses(future, 'no downgrade')
 
         def unknown(record):
@@ -276,7 +276,7 @@ class ProvenanceContractTests(unittest.TestCase):
     def test_staged_input_membership_families(self):
         def drop(record):
             record['inputs']['completion']['files'].pop()
-        self.refuses(drop, '19 rows')
+        self.refuses(drop, '20 rows')
 
         def foreign(record):
             row = dict(record['inputs']['completion']['files'][0])
@@ -346,7 +346,7 @@ class ProvenanceContractTests(unittest.TestCase):
                      'unsupported mode')
 
     def test_archive_families(self):
-        self.refuses(lambda r: r['build']['archive']['selected_modules'].pop(), '15 modules')
+        self.refuses(lambda r: r['build']['archive']['selected_modules'].pop(), '16 modules')
 
         def unselected(record):
             record['build']['archive']['selected_modules'][0]['name'] = 'qwen.engine'

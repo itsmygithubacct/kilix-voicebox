@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Strictly validate a candidate-v2 sidecar provenance record.
+"""Strictly validate a candidate-v3 sidecar provenance record.
 
 This is a consumer. It never builds, stages, downloads or executes anything: it
 reads an actual binary, an actual provenance record, the checked-in input
@@ -24,10 +24,11 @@ import re
 import sys
 
 
-SCHEMA = 'kilix.voicebox.sidecar-provenance/candidate-v2'
-STAGE_SCHEMA = 'kilix.voicebox.sidecar-stage/v1'
+SCHEMA = 'kilix.voicebox.sidecar-provenance/candidate-v3'
+STAGE_SCHEMA = 'kilix.voicebox.sidecar-stage/v2'
 HANDOFF_SCHEMA = 'kilix.voicebox.sidecar-output/candidate-v1'
-MANIFEST_SHA256 = '63a8498f47b1c8c1daf78a4d62b3f98bb6ba53a29f8caeb9929395163b5f2d8e'
+MANIFEST_SCHEMA = 'kilix.voicebox.sidecar-inputs/v2'
+MANIFEST_SHA256 = 'fa26ea1c27217be6f9eb4509bd84e3c0b8f4c02a95913d5cd2cadd0c352b59d2'
 VOICE_COMMIT = '228ac7ae5b1ceb6b8065f3bc1342f90bbc740345'
 TRANSCRIBE_COMMIT = '0c61eb4edcdc75e1aca993ef7c8673b3b9aed6a9'
 WHEEL_FILENAME = 'kilix_transcribe-0.1.0-py3-none-any.whl'
@@ -82,8 +83,8 @@ LOCKED_DISTRIBUTIONS = (
 PLAINTEXT_PATHS = ('VERSION', 'licenses/kilix-transcribe/LICENSE',
                    'licenses/kilix-voice/LICENSE', 'voicelib/microphone_supervisor.py')
 SNAPSHOT_PREFIXES = ('source/', 'projection/', 'python/', 'env/', 'host/')
-SELECTED_MODULE_COUNT = 15
-COMPLETION_FILE_COUNT = 19
+SELECTED_MODULE_COUNT = 16
+COMPLETION_FILE_COUNT = 20
 
 MAX_PROVENANCE_BYTES = 16 * 1024 ** 2
 MAX_DEPTH = 32
@@ -266,6 +267,7 @@ def manifest_rows(manifest_bytes):
             'the checked-in input manifest is not the selected one')
     manifest = parse_strict(manifest_bytes, label='input manifest')
     obj(manifest, ('schema', 'sources', 'wheel'), 'input manifest')
+    require(manifest['schema'] == MANIFEST_SCHEMA, 'the input manifest has the wrong schema')
     rows = {}
     modes = {}
     for key in ('voice', 'transcribe'):
@@ -536,6 +538,10 @@ def validate(*, provenance_bytes, binary_bytes_length, binary_sha256, build_id,
     manifest, rows, modes = manifest_rows(manifest_bytes)
     inputs = obj(record['inputs'], ('completion_sha256', 'completion', 'plaintext'), 'inputs')
     completion_rows = validate_completion(inputs['completion'], rows, modes)
+    for key, source in manifest['sources'].items():
+        require(inputs['completion']['sources'][key]
+                == {field: source[field] for field in ('repository', 'commit', 'tree')},
+                'completion source identity differs from the selected manifest: ' + key)
     require(digest(inputs['completion_sha256'], 'inputs.completion_sha256')
             == sha256_bytes(canonical_completion(inputs['completion'])),
             'inputs.completion_sha256 does not hash the C19 canonical completion encoding')
@@ -575,7 +581,7 @@ def validate(*, provenance_bytes, binary_bytes_length, binary_sha256, build_id,
             'the product uv.lock sha256 read from the checked-in file',
             'the exact Linux x86_64 CPython3.12 runtime plus build distribution '
             'names/versions selected by those fixed uv.lock bytes, including standard extras',
-            'the input manifest sha256 and its complete selected 19-row population',
+            'the input manifest sha256 and its complete selected 20-row population',
             'the collector handoff build_id, binary and provenance identities',
             'the expected clean source commit and tree supplied by the caller',
         ],
