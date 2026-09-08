@@ -1,22 +1,28 @@
 """Deterministic controls for the HTTP fixture's diagnostics (C26 F1/F2).
 
 These drive the **actual** `CaptureHTTPTests` class from its own unmodified
-source. Nothing here runs a real backend, a listening socket, HTTP traffic, a
+source. Nothing here runs a real backend, a listening peer, completed HTTP, a
 provider, a model or a timed replay, and nothing installs, resolves or
 materialises an environment: only the existing standard library, a private
 HOME/TMPDIR, and owned subprocesses of a few stdlib lines.
+The fixture still binds a loopback port and attempts loopback readiness
+connections. Refused connections are not a claim of zero networking.
 
 **Disclosed substitutions**, both narrow and both outside the behaviour under
 test:
 
 1. The reviewed file's only sibling import is
    ``from .test_managed_capture import PEER, wait_for``. That sibling imports
-   ``voicelib``, which is not importable here and which this task may not
-   install. Rather than fabricate it, the sibling's **own** ``PEER`` assignment
+   ``voicelib``, which standalone controls need not import or install. Rather
+   than fabricate it, the sibling's **own** ``PEER`` assignment
    and ``wait_for`` function are lifted verbatim from its unmodified source by
-   AST extraction and executed in a stand-in module, with ``__file__`` set to
+   AST extraction and executed in a private, nonregistered module, with ``__file__`` set to
    the real sibling so ``PEER`` resolves as it really does. Neither is
-   reimplemented or given different behaviour.
+   reimplemented or given different behaviour. The unchanged actual fixture
+   source then executes in another private, nonregistered module. Its private
+   builtins dictionary intercepts only that exact relative sibling import;
+   every other import delegates unchanged. This is not a canonical import and
+   creates/replaces no canonical module-cache entry or package attribute.
 2. ``PEER`` is then pointed at an owned peer of a few stdlib lines that never
    listens, so readiness is decided by this control rather than by traffic.
 
@@ -28,6 +34,7 @@ fixture for its setup behaviour only, which is where both findings live.
 from __future__ import annotations
 
 import ast
+import builtins
 import io
 import json
 import os
@@ -35,6 +42,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import types
 import unittest
 
@@ -42,6 +50,7 @@ import unittest
 TESTS = Path(__file__).resolve().parent
 SIBLING = TESTS / 'test_managed_capture.py'
 SIBLING_MODULE = 'kilix_voicebox_backend.tests.test_managed_capture'
+HTTP_FIXTURE = TESTS / 'test_capture_http.py'
 
 # A peer that echoes its session token and exits: the early-server-exit path.
 PEER_ECHO_TOKEN = '''import os, sys
@@ -70,24 +79,38 @@ time.sleep(120)
 
 
 def load_actual_fixture():
-    """Import the real class, satisfying its sibling import without voicelib."""
-    if SIBLING_MODULE not in sys.modules:
-        tree = ast.parse(SIBLING.read_text(encoding='utf-8'))
-        wanted = [node for node in tree.body
-                  if (isinstance(node, ast.Assign) and node.targets
-                      and isinstance(node.targets[0], ast.Name)
-                      and node.targets[0].id == 'PEER')
-                  or (isinstance(node, ast.FunctionDef) and node.name == 'wait_for')]
-        if len(wanted) != 2:
-            raise AssertionError('expected exactly PEER and wait_for from the sibling')
-        stand_in = types.ModuleType(SIBLING_MODULE)
-        stand_in.__file__ = str(SIBLING)
-        stand_in.__dict__.update({'Path': Path, 'time': __import__('time')})
-        exec(compile(ast.Module(body=wanted, type_ignores=[]), str(SIBLING), 'exec'),
-             stand_in.__dict__)
-        sys.modules[SIBLING_MODULE] = stand_in
-    from kilix_voicebox_backend.tests import test_capture_http
-    return test_capture_http
+    """Execute the unchanged fixture privately; never register a fake sibling."""
+    tree = ast.parse(SIBLING.read_text(encoding='utf-8'))
+    wanted = [node for node in tree.body
+              if (isinstance(node, ast.Assign) and len(node.targets) == 1
+                  and isinstance(node.targets[0], ast.Name)
+                  and node.targets[0].id == 'PEER')
+              or (isinstance(node, ast.FunctionDef) and node.name == 'wait_for')]
+    if (len(wanted) != 2
+            or sum(isinstance(node, ast.Assign) for node in wanted) != 1
+            or sum(isinstance(node, ast.FunctionDef) for node in wanted) != 1):
+        raise AssertionError('expected exactly PEER and wait_for from the sibling')
+    helpers = types.ModuleType(__name__ + '._private_helpers')
+    helpers.__file__ = str(SIBLING)
+    helpers.__dict__.update({'Path': Path, 'time': time})
+    exec(compile(ast.Module(body=wanted, type_ignores=[]), str(SIBLING), 'exec', dont_inherit=True),
+         helpers.__dict__)
+
+    actual = types.ModuleType(__name__ + '._private_http_fixture')
+    actual.__file__ = str(HTTP_FIXTURE)
+    actual.__package__ = __package__
+    original_import = builtins.__import__
+
+    def private_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if (globals is actual.__dict__ and name == 'test_managed_capture'
+                and level == 1 and fromlist == ('PEER', 'wait_for')):
+            return helpers
+        return original_import(name, globals, locals, fromlist, level)
+
+    actual.__dict__['__builtins__'] = dict(vars(builtins), __import__=private_import)
+    exec(compile(HTTP_FIXTURE.read_text(encoding='utf-8'), str(HTTP_FIXTURE), 'exec', dont_inherit=True),
+         actual.__dict__)
+    return actual
 
 
 fixture = load_actual_fixture()
@@ -323,7 +346,7 @@ class SourceBindingTests(unittest.TestCase):
     """Bind exactly what was substituted, so the disclosure stays true."""
 
     def test_the_sibling_helpers_are_the_real_ones(self):
-        stand_in = sys.modules[SIBLING_MODULE]
+        actual = load_actual_fixture()
         source = SIBLING.read_text(encoding='utf-8')
         tree = ast.parse(source)
         real = next(node for node in tree.body
@@ -331,13 +354,28 @@ class SourceBindingTests(unittest.TestCase):
         lifted = ast.parse(''.join(source.splitlines(keepends=True)[
             real.lineno - 1:real.end_lineno])).body[0]
         self.assertEqual(ast.dump(real), ast.dump(lifted))
-        self.assertEqual(stand_in.__file__, str(SIBLING))
+        expected = {'__file__': str(SIBLING), 'Path': Path, 'time': time}
+        exec(compile(ast.Module(body=[real], type_ignores=[]), str(SIBLING), 'exec', dont_inherit=True),
+             expected)
+        self.assertEqual(actual.wait_for.__code__, expected['wait_for'].__code__)
+        self.assertEqual(actual.wait_for.__code__.co_filename, str(SIBLING))
+        self.assertEqual(actual.wait_for.__globals__['__file__'], str(SIBLING))
         # PEER really is the sibling's own expression, resolved against it.
-        self.assertEqual(fixture.PEER if fixture.PEER == stand_in.PEER else stand_in.PEER,
-                         str(SIBLING.with_name('capture_peer.py')))
+        self.assertEqual(actual.PEER, str(SIBLING.with_name('capture_peer.py')))
+        self.assertEqual(actual.wait_for.__globals__['PEER'], actual.PEER)
+        observed = []
+        actual.wait_for(lambda: (observed.append(True), True)[1])
+        self.assertEqual(observed, [True])
 
     def test_no_voicelib_was_fabricated(self):
-        self.assertNotIn('voicelib', sys.modules)
+        before = {name: value for name, value in sys.modules.copy().items()
+                  if name == 'voicelib' or name.startswith('voicelib.')}
+        load_actual_fixture()
+        after = {name: value for name, value in sys.modules.copy().items()
+                 if name == 'voicelib' or name.startswith('voicelib.')}
+        self.assertEqual(set(before), set(after))
+        for name, value in before.items():
+            self.assertIs(after[name], value)
 
 
 if __name__ == '__main__':
