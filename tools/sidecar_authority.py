@@ -36,6 +36,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import secrets
@@ -79,7 +80,7 @@ def process_start_ticks(pid):
     if close < 0:
         return None
     fields = data[close + 2:].split()
-    if len(fields) < 20:
+    if len(fields) < 20 or fields[0] in (b'Z', b'X', b'x'):
         return None
     try:
         return int(fields[19])
@@ -90,6 +91,15 @@ def process_start_ticks(pid):
 def _require(condition, message):
     if not condition:
         raise AuthorityError(message)
+
+
+def _finite_number(value):
+    if not isinstance(value, (int, float)) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 def _private_regular_file(path):
@@ -138,6 +148,11 @@ def issue(directory, *, build_id, source_commit, source_tree, platform,
     from the published file here, so the capability records what this invocation
     actually verified rather than what the receipt asserts about itself.
     """
+    issued_at = time.time()
+    _require(_finite_number(issued_at) and _finite_number(lifetime_seconds),
+             'the capability issue time and lifetime must be finite numbers')
+    expires_at = issued_at + lifetime_seconds
+    _require(_finite_number(expires_at), 'the capability expiry must be finite')
     directory = Path(directory).resolve()
     root = Path(root).resolve()
     _require(not directory.is_relative_to(root),
@@ -169,8 +184,8 @@ def issue(directory, *, build_id, source_commit, source_tree, platform,
         'build_id': build_id,
         'issuer_pid': os.getpid(),
         'issuer_start_ticks': process_start_ticks(os.getpid()),
-        'issued_at': time.time(),
-        'expires_at': time.time() + lifetime_seconds,
+        'issued_at': issued_at,
+        'expires_at': expires_at,
         'source_commit': source_commit,
         'source_tree': source_tree,
         'platform': platform,
@@ -275,6 +290,8 @@ def consume(path, *, root, source_commit, source_tree, platform, now=None,
                            'the capability issue time is not a number')
         expires_at = _typed(record, 'expires_at', (int, float),
                             'the capability expiry is not a number')
+        _require(all(_finite_number(value) for value in (moment, issued_at, expires_at)),
+                 'the capability validation, issue and expiry times must be finite numbers')
         _require(expires_at > issued_at, 'the capability expiry precedes its issue time')
         _require(moment <= expires_at, 'the capability has expired')
         _require(moment >= issued_at - 60,
