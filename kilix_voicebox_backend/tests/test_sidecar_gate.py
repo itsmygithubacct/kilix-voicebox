@@ -104,6 +104,25 @@ class Fixture:
             snapshot_row('python/lib/python3.12/os.py', b'standard library'),
             snapshot_row('source/kilix_voicebox_backend/server.py', b'product source'),
         ]
+        # Shaped records only: no installed distribution or archive is observed.
+        # Retain the original first-row duplicate-member sentinel verbatim so
+        # all original test methods/assertions remain unchanged. It is an
+        # arbitrary fixture member owned by the first normalized row, not an
+        # assertion that alembic ships a pyinstaller file.
+        distributions = []
+        for index, (name, version) in enumerate(verify.LOCKED_DISTRIBUTIONS):
+            code_path = 'env/' + name + '/module.py'
+            record_path = 'env/' + name + '-' + version + '.dist-info/RECORD'
+            record_data = b'record bytes' if name == 'pyinstaller' else (name + ' record').encode()
+            snapshot_files.append(snapshot_row(code_path, (name + ' controlled module').encode()))
+            if name != 'pyinstaller':
+                snapshot_files.append(snapshot_row(record_path, record_data))
+            members = [code_path, record_path]
+            if index == 0:
+                members.append('env/pyinstaller/__init__.py')
+            distributions.append({'name': name, 'version': version,
+                                  'record_sha256': sha(record_data),
+                                  'members': sorted(members)})
         snapshot_files.sort(key=lambda row: row['path'])
         modules = sorted(
             ({'name': verify.module_name(row['path']),
@@ -135,12 +154,7 @@ class Fixture:
                                       if row['path'].startswith('python/')),
                 },
                 'pyinstaller': {'distribution': 'pyinstaller', 'version': verify.PYINSTALLER_VERSION},
-                'distributions': [{
-                    'name': 'pyinstaller', 'version': verify.PYINSTALLER_VERSION,
-                    'record_sha256': sha(b'record bytes'),
-                    'members': sorted(row['path'] for row in snapshot_files
-                                      if row['path'].startswith('env/')),
-                }],
+                'distributions': distributions,
                 'tools': [
                     {'name': 'host/lib/libz.so.1', 'member': 'host/lib/libz.so.1'},
                     {'name': 'ld', 'member': 'host/bin/ld'},

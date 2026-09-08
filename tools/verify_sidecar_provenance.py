@@ -37,6 +37,48 @@ PROVIDER_ENDPOINTS = ['kilix-qwen-tts.sock', 'kilix-transcribe.sock']
 PYTHON_VERSION = '3.12.8'
 PYTHON_EXECUTABLE = 'python/bin/python3.12'
 PYINSTALLER_VERSION = '6.15.0'
+# Exact Linux x86_64 CPython 3.12.8 runtime + build selection. This table is
+# valid only for these raw lock bytes, not for arbitrary future uv lockfiles.
+# Its complete marker/extra traversal is reproduced in test_sidecar_lock_selection.
+UV_LOCK_SHA256 = 'c32006e700bde9801f6e427d2c1370f6ff3a1bb6b7259e2468c414345de89aa6'
+LOCKED_DISTRIBUTIONS = (
+    ('alembic', '1.19.1'),
+    ('altgraph', '0.17.5'),
+    ('annotated-doc', '0.0.5'),
+    ('annotated-types', '0.8.0'),
+    ('anyio', '4.14.2'),
+    ('cffi', '2.1.1'),
+    ('click', '8.5.0'),
+    ('fastapi', '0.141.1'),
+    ('greenlet', '3.5.5'),
+    ('h11', '0.16.0'),
+    ('httptools', '0.8.0'),
+    ('idna', '3.19'),
+    ('mako', '1.4.1'),
+    ('markupsafe', '3.0.3'),
+    ('numpy', '2.5.2'),
+    ('packaging', '26.3'),
+    ('pillow', '12.3.0'),
+    ('pycparser', '3.0'),
+    ('pydantic', '2.13.5'),
+    ('pydantic-core', '2.46.5'),
+    ('pyinstaller', '6.15.0'),
+    ('pyinstaller-hooks-contrib', '2026.7'),
+    ('python-dotenv', '1.2.3'),
+    ('python-multipart', '0.0.32'),
+    ('pyyaml', '6.0.3'),
+    ('setuptools', '84.0.0'),
+    ('soundfile', '0.14.0'),
+    ('sqlalchemy', '2.0.52'),
+    ('starlette', '1.6.0'),
+    ('typing-extensions', '4.16.0'),
+    ('typing-inspection', '0.4.4'),
+    ('uvicorn', '0.52.4'),
+    ('uvloop', '0.22.1'),
+    ('watchfiles', '1.2.0'),
+    ('websockets', '17.1'),
+)
+
 PLAINTEXT_PATHS = ('VERSION', 'licenses/kilix-transcribe/LICENSE',
                    'licenses/kilix-voice/LICENSE', 'voicelib/microphone_supervisor.py')
 SNAPSHOT_PREFIXES = ('source/', 'projection/', 'python/', 'env/', 'host/')
@@ -388,6 +430,8 @@ def validate_distributions(distributions, population):
     missing = env_population - set(claimed)
     require(not missing, 'env/ snapshot files are claimed by no distribution: '
             + ','.join(sorted(missing)[:5]))
+    require({row['name']: row['version'] for row in rows} == dict(LOCKED_DISTRIBUTIONS),
+            'build.distributions does not match the selected uv.lock name/version population')
     return {row['name']: row for row in rows}
 
 
@@ -478,6 +522,8 @@ def validate(*, provenance_bytes, binary_bytes_length, binary_sha256, build_id,
             'provenance source_tree is not that commit tree')
     require(digest(record['uv_lock_sha256'], 'uv_lock_sha256') == uv_lock_sha256,
             'provenance does not bind the actual product uv.lock bytes')
+    require(uv_lock_sha256 == UV_LOCK_SHA256,
+            'the actual product uv.lock has no supported distribution selection')
     require(digest(record['sidecar_sha256'], 'sidecar_sha256') == binary_sha256,
             'provenance does not bind the actual sidecar bytes')
     require(integer(record['sidecar_bytes'], 'sidecar_bytes', low=1) == binary_bytes_length,
@@ -527,6 +573,8 @@ def validate(*, provenance_bytes, binary_bytes_length, binary_sha256, build_id,
             'the sidecar binary length and sha256 read from the installed file',
             'the provenance bytes, their canonical encoding and their sha256',
             'the product uv.lock sha256 read from the checked-in file',
+            'the exact Linux x86_64 CPython3.12 runtime plus build distribution '
+            'names/versions selected by those fixed uv.lock bytes, including standard extras',
             'the input manifest sha256 and its complete selected 19-row population',
             'the collector handoff build_id, binary and provenance identities',
             'the expected clean source commit and tree supplied by the caller',
