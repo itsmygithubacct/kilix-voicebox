@@ -6,7 +6,8 @@ Handles voice cloning, generation history, and server mode.
 
 from fastapi import FastAPI, Depends, UploadFile, File, Form, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse, Response
+from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy.orm import Session
 from typing import List, Optional
 import asyncio
@@ -18,6 +19,8 @@ import hmac
 import os
 import re
 import stat
+import threading
+import time
 from pathlib import Path
 
 from . import database, models, profiles, history, tts, transcribe, config, export_import, channels, stories, __version__
@@ -25,6 +28,7 @@ from .database import get_db, Generation as DBGeneration, VoiceProfile as DBVoic
 from .utils.cache import clear_voice_prompt_cache
 from .kilix_provider import ProviderError
 from .orchestrator import VoiceboxOrchestrator
+from .managed_capture import CaptureBridge, CaptureRefusal, transcribe_owned, until_disconnected
 from .private_store import (
     MAX_GENERATION_BYTES,
     MAX_SAMPLE_BYTES,
@@ -146,6 +150,7 @@ app.add_middleware(
     allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["Content-Type", "X-Kilix-Voicebox-Session"],
+    expose_headers=["X-Kilix-Recording-Duration"],
 )
 
 
@@ -926,35 +931,88 @@ async def export_generation_audio(
 # TRANSCRIPTION ENDPOINTS
 # ============================================
 
+_capture_bridge = CaptureBridge()
+
+
+class RecordingInput(BaseModel):
+    model_config = ConfigDict(strict=True, extra="forbid")
+    id: str = Field(pattern=r"^[0-9a-f]{32}$", min_length=32, max_length=32)
+    seconds: int = Field(ge=1, le=30)
+
+
+@app.get("/recording/status")
+async def recording_status():
+    return JSONResponse(_capture_bridge.status(), headers={"Cache-Control": "no-store"})
+
+
+@app.post("/recording/{identifier}/stop")
+async def recording_stop(identifier: str):
+    try:
+        return _capture_bridge.control(identifier, cancel=False)
+    except CaptureRefusal as error:
+        raise HTTPException(409, detail={"code": error.code}) from None
+
+
+@app.post("/recording/{identifier}/cancel")
+async def recording_cancel(identifier: str):
+    try:
+        return _capture_bridge.control(identifier, cancel=True)
+    except CaptureRefusal as error:
+        raise HTTPException(409, detail={"code": error.code}) from None
+
+
+@app.post("/recording")
+async def recording_start(data: RecordingInput, request: Request):
+    gone = threading.Event()
+    item = None
+    try:
+        item = _capture_bridge.claim(data.id, data.seconds, gone)
+        payload = await until_disconnected(request, lambda: _capture_bridge.record(item), gone)
+        if await request.is_disconnected():
+            raise CaptureRefusal("RECORDING_STOPPED")
+        return Response(payload, media_type="audio/wav", headers={
+            "Cache-Control": "no-store", "X-Kilix-Recording-Duration": str(item.duration)})
+    except CaptureRefusal as error:
+        raise HTTPException(409, detail={"code": error.code}) from None
+    except Exception:
+        raise HTTPException(503, detail={"code": "RECORDING_FAILED"}) from None
+    finally:
+        if item is not None:
+            _capture_bridge.abandon_unstarted(item)
+
+
 @app.post("/transcribe", response_model=models.TranscriptionResponse)
 async def transcribe_audio(
+    request: Request,
     file: UploadFile = File(...),
     language: Optional[str] = Form(None),
 ):
     """Transcribe audio file to text."""
-    # Stage a bounded upload in the private product cache; retain nothing after the request.
+    # The original operation budget covers staging, client work and delivery.
+    deadline = time.monotonic() + 300
+    gone = threading.Event()
     maximum = 2_147_483_648
-    total = 0
-    with tempfile.NamedTemporaryFile(
-        suffix=".wav", delete=False, dir=config.get_cache_dir()
-    ) as tmp:
-        while True:
-            chunk = await file.read(1024 * 1024)
-            if not chunk:
-                break
-            total += len(chunk)
-            if total > maximum:
-                Path(tmp.name).unlink(missing_ok=True)
-                raise HTTPException(status_code=413, detail={"code": "INPUT_SIZE"})
-            tmp.write(chunk)
-        tmp_path = tmp.name
-
+    tmp_path = None
     try:
-        result = await asyncio.to_thread(
-            _voice_orchestrator().transcribe_file,
-            audio_path=Path(tmp_path),
-            language=language,
-        )
+        total = 0
+        with tempfile.NamedTemporaryFile(
+            suffix=".wav", delete=False, dir=config.get_cache_dir()
+        ) as tmp:
+            tmp_path = Path(tmp.name)
+            while True:
+                if time.monotonic() >= deadline or await request.is_disconnected():
+                    raise CaptureRefusal("TRANSCRIPTION_STOPPED")
+                chunk = await file.read(min(1024 * 1024, maximum + 1 - total))
+                if not chunk:
+                    break
+                total += len(chunk)
+                if total > maximum:
+                    raise HTTPException(status_code=413, detail={"code": "INPUT_SIZE"})
+                tmp.write(chunk)
+        result = await until_disconnected(request, lambda: transcribe_owned(
+            tmp_path, language, gone, deadline=deadline), gone)
+        if time.monotonic() >= deadline or await request.is_disconnected():
+            raise CaptureRefusal("TRANSCRIPTION_STOPPED")
         text = result.get("text")
         duration_ms = result.get("duration_ms", 0)
         if type(text) is not str or type(duration_ms) is not int or duration_ms < 0:
@@ -963,7 +1021,7 @@ async def transcribe_audio(
             text=text,
             duration=duration_ms / 1000,
         )
-    except ProviderError as error:
+    except (ProviderError, CaptureRefusal) as error:
         status_code = 409 if error.code in {"MODEL_MISSING", "RUNTIME_UNSELECTED"} else 503
         raise HTTPException(status_code=status_code, detail={"code": error.code}) from None
     except HTTPException:
@@ -972,7 +1030,8 @@ async def transcribe_audio(
         raise HTTPException(status_code=500, detail={"code": "VOICEBOX_INTERNAL"}) from None
     finally:
         # Clean up temp file
-        Path(tmp_path).unlink(missing_ok=True)
+        if tmp_path is not None:
+            tmp_path.unlink(missing_ok=True)
 
 
 # ============================================
@@ -1338,6 +1397,7 @@ async def startup_event():
 @app.on_event("shutdown")
 async def shutdown_event():
     """Release this client's provider residency requests without deleting payloads."""
+    _capture_bridge.shutdown()
     await asyncio.gather(
         tts.unload_tts_model(),
         transcribe.unload_transcribe_model(),

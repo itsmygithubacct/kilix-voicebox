@@ -115,7 +115,7 @@ export function ProfileForm() {
   const addSample = useAddSample();
   const uploadAvatar = useUploadAvatar();
   const deleteAvatar = useDeleteAvatar();
-  const transcribe = useTranscription();
+  const transcribe = useTranscription(open);
   const { toast } = useToast();
   const [sampleMode, setSampleMode] = useState<'upload' | 'record' | 'system'>('record');
   const [audioDuration, setAudioDuration] = useState<number | null>(null);
@@ -190,10 +190,11 @@ export function ProfileForm() {
     stopRecording,
     cancelRecording,
   } = useAudioRecording({
+    active: open && sampleMode === 'record',
     maxDurationSeconds: 29,
     onRecordingComplete: (blob, recordedDuration) => {
-      const file = new File([blob], `recording-${Date.now()}.webm`, {
-        type: blob.type || 'audio/webm',
+      const file = new File([blob], `recording-${Date.now()}.wav`, {
+        type: 'audio/wav',
       }) as File & { recordedDuration?: number };
       // Store the actual recorded duration to bypass metadata reading issues on Windows
       if (recordedDuration !== undefined) {
@@ -559,6 +560,10 @@ export function ProfileForm() {
   }
 
   async function handleOpenChange(newOpen: boolean) {
+    if (!newOpen) {
+      cancelRecording();
+      transcribe.cancel();
+    }
     if (!newOpen && isCreating) {
       // Save draft when closing the create modal
       const values = form.getValues();
@@ -593,9 +598,6 @@ export function ProfileForm() {
     if (!newOpen) {
       setEditingProfileId(null);
       // Don't reset form here - let the effect handle it based on draft state
-      if (isRecording) {
-        cancelRecording();
-      }
       if (isSystemRecording) {
         cancelSystemRecording();
       }

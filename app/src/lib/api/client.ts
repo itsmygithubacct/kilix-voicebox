@@ -1,5 +1,6 @@
 import type { LanguageCode } from '@/lib/constants/languages';
 import { useServerStore } from '@/stores/serverStore';
+import type { RecordingStatus } from '@/stores/recordingStore';
 import type {
   DeletePreview,
   DeleteReceipt,
@@ -295,7 +296,36 @@ class ApiClient {
   }
 
   // Transcription
-  async transcribeAudio(file: File, language?: LanguageCode): Promise<TranscriptionResponse> {
+  async recordingStatus(signal: AbortSignal): Promise<RecordingStatus> {
+    return this.request<RecordingStatus>('/recording/status', {
+      cache: 'no-store',
+      signal: AbortSignal.any([signal, AbortSignal.timeout(1000)]),
+    });
+  }
+
+  async controlRecording(id: string, operation: 'stop' | 'cancel'): Promise<RecordingStatus> {
+    return this.request<RecordingStatus>(`/recording/${id}/${operation}`, {
+      method: 'POST', signal: AbortSignal.timeout(1000),
+    });
+  }
+
+  async recordAudio(id: string, seconds: number, signal: AbortSignal) {
+    const response = await this.authenticatedFetch(`${this.getBaseUrl()}/recording`, {
+      method: 'POST', signal: AbortSignal.any([signal, AbortSignal.timeout((seconds + 6) * 1000)]),
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ id, seconds }),
+    });
+    if (!response.ok) await this.throwResponseError(response);
+    const blob = await response.blob();
+    const duration = Number(response.headers.get('X-Kilix-Recording-Duration'));
+    if (blob.type !== 'audio/wav' || blob.size > 960044 ||
+        !Number.isFinite(duration) || duration <= 0 || duration > 30) {
+      throw new Error('RECORDING_INVALID');
+    }
+    return { blob, duration };
+  }
+
+  async transcribeAudio(file: File, language?: LanguageCode, signal?: AbortSignal): Promise<TranscriptionResponse> {
     const formData = new FormData();
     formData.append('file', file);
     if (language) {
@@ -306,6 +336,7 @@ class ApiClient {
     const response = await this.authenticatedFetch(url, {
       method: 'POST',
       body: formData,
+      signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(300000)]) : AbortSignal.timeout(300000),
     });
 
     if (!response.ok) {

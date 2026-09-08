@@ -51,7 +51,7 @@ interface SampleUploadProps {
 export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProps) {
   const platform = usePlatform();
   const addSample = useAddSample();
-  const transcribe = useTranscription();
+  const transcribe = useTranscription(open);
   const { data: profile } = useProfile(profileId);
   const { toast } = useToast();
   const [mode, setMode] = useState<'upload' | 'record' | 'system'>('upload');
@@ -74,11 +74,12 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
     stopRecording,
     cancelRecording,
   } = useAudioRecording({
+    active: open && mode === 'record',
     maxDurationSeconds: 29,
     onRecordingComplete: (blob, recordedDuration) => {
       // Convert blob to File object
-      const file = new File([blob], `recording-${Date.now()}.webm`, {
-        type: blob.type || 'audio/webm',
+      const file = new File([blob], `recording-${Date.now()}.wav`, {
+        type: 'audio/wav',
       }) as File & { recordedDuration?: number };
       // Store the actual recorded duration to bypass metadata reading issues on Windows
       if (recordedDuration !== undefined) {
@@ -191,11 +192,10 @@ export function SampleUpload({ profileId, open, onOpenChange }: SampleUploadProp
 
   function handleOpenChange(newOpen: boolean) {
     if (!newOpen) {
+      transcribe.cancel();
+      cancelRecording();
       form.reset();
       setMode('upload');
-      if (isRecording) {
-        cancelRecording();
-      }
       if (isSystemRecording) {
         cancelSystemRecording();
       }

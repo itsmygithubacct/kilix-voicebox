@@ -1,203 +1,86 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { usePlatform } from '@/platform/PlatformContext';
-import { convertToWav } from '@/lib/utils/audio';
+import { apiClient } from '@/lib/api/client';
+import { useRecordingStore } from '@/stores/recordingStore';
 
 interface UseAudioRecordingOptions {
+  active?: boolean;
   maxDurationSeconds?: number;
   onRecordingComplete?: (blob: Blob, duration?: number) => void;
 }
 
-export function useAudioRecording({
-  maxDurationSeconds = 29,
-  onRecordingComplete,
-}: UseAudioRecordingOptions = {}) {
-  const platform = usePlatform();
+export function useAudioRecording({ active = true, maxDurationSeconds = 29,
+  onRecordingComplete }: UseAudioRecordingOptions = {}) {
   const [isRecording, setIsRecording] = useState(false);
-  const [duration, setDuration] = useState(0);
   const [error, setError] = useState<string | null>(null);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const streamRef = useRef<MediaStream | null>(null);
-  const timerRef = useRef<number | null>(null);
-  const startTimeRef = useRef<number | null>(null);
-
-  const startRecording = useCallback(async () => {
-    try {
-      setError(null);
-      chunksRef.current = [];
-      setDuration(0);
-
-      // Check if getUserMedia is available
-      // In Tauri, navigator.mediaDevices might not be available immediately
-      if (typeof navigator === 'undefined') {
-        const errorMsg =
-          'Navigator API is not available. This might be a Tauri configuration issue.';
-        setError(errorMsg);
-        throw new Error(errorMsg);
-      }
-
-      if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        // Try waiting a bit for Tauri webview to initialize
-        await new Promise((resolve) => setTimeout(resolve, 100));
-
-        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-          console.error('VOICEBOX_MEDIA_DEVICES_UNAVAILABLE');
-
-          const errorMsg = platform.metadata.isTauri
-            ? 'Microphone access is not available. Please ensure:\n1. The app has microphone permissions in System Settings (macOS: System Settings > Privacy & Security > Microphone)\n2. You restart the app after granting permissions\n3. You are using Tauri v2 with a webview that supports getUserMedia'
-            : 'Microphone access is not available. Please ensure you are using a secure context (HTTPS or localhost) and that your browser has microphone permissions enabled.';
-          setError(errorMsg);
-          throw new Error(errorMsg);
-        }
-      }
-
-      // Request microphone access
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
-
-      streamRef.current = stream;
-
-      // Create MediaRecorder with preferred MIME type
-      const options: MediaRecorderOptions = {
-        mimeType: 'audio/webm;codecs=opus',
-      };
-
-      // Fallback to default if webm not supported
-      if (!MediaRecorder.isTypeSupported(options.mimeType!)) {
-        delete options.mimeType;
-      }
-
-      const mediaRecorder = new MediaRecorder(stream, options);
-      mediaRecorderRef.current = mediaRecorder;
-
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          chunksRef.current.push(event.data);
-        }
-      };
-
-      mediaRecorder.onstop = async () => {
-        const webmBlob = new Blob(chunksRef.current, { type: 'audio/webm' });
-
-        // Convert to WAV format to avoid needing ffmpeg on backend
-        try {
-          const wavBlob = await convertToWav(webmBlob);
-
-          // Pass the actual recorded duration
-          const recordedDuration = startTimeRef.current
-            ? (Date.now() - startTimeRef.current) / 1000
-            : undefined;
-          onRecordingComplete?.(wavBlob, recordedDuration);
-        } catch {
-          console.error('VOICEBOX_AUDIO_CONVERSION_FAILED');
-          // Fallback to original blob if conversion fails
-          const recordedDuration = startTimeRef.current
-            ? (Date.now() - startTimeRef.current) / 1000
-            : undefined;
-          onRecordingComplete?.(webmBlob, recordedDuration);
-        }
-
-        // Stop all tracks
-        streamRef.current?.getTracks().forEach((track) => {
-          track.stop();
-        });
-        streamRef.current = null;
-      };
-
-      mediaRecorder.onerror = () => {
-        setError('Recording error occurred');
-        console.error('VOICEBOX_MEDIA_RECORDER_FAILED');
-      };
-
-      // Start recording
-      mediaRecorder.start(100); // Collect data every 100ms
-      setIsRecording(true);
-      startTimeRef.current = Date.now();
-
-      // Start timer
-      timerRef.current = window.setInterval(() => {
-        if (startTimeRef.current) {
-          const elapsed = (Date.now() - startTimeRef.current) / 1000;
-          setDuration(elapsed);
-
-          // Auto-stop at max duration
-          if (elapsed >= maxDurationSeconds) {
-            if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-              mediaRecorderRef.current.stop();
-              setIsRecording(false);
-              if (timerRef.current !== null) {
-                clearInterval(timerRef.current);
-                timerRef.current = null;
-              }
-            }
-          }
-        }
-      }, 100);
-    } catch (err) {
-      const errorMessage =
-        err instanceof Error
-          ? err.message
-          : 'Failed to access microphone. Please check permissions.';
-      setError(errorMessage);
-      setIsRecording(false);
-    }
-  }, [maxDurationSeconds, onRecordingComplete, platform.metadata.isTauri]);
-
-  const stopRecording = useCallback(() => {
-    if (mediaRecorderRef.current && isRecording) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-
-      if (timerRef.current !== null) {
-        clearInterval(timerRef.current);
-        timerRef.current = null;
-      }
-    }
-  }, [isRecording]);
+  const status = useRecordingStore((state) => state.status);
+  const current = useRef<{ id: string; controller: AbortController; stop: boolean } | null>(null);
+  const callback = useRef(onRecordingComplete);
+  callback.current = onRecordingComplete;
+  const activeRef = useRef(active);
+  activeRef.current = active;
 
   const cancelRecording = useCallback(() => {
-    if (mediaRecorderRef.current) {
-      mediaRecorderRef.current.stop();
-      setIsRecording(false);
-      chunksRef.current = [];
-      setDuration(0);
-    }
-
-    // Stop all tracks
-    streamRef.current?.getTracks().forEach((track) => {
-      track.stop();
-    });
-    streamRef.current = null;
-
-    if (timerRef.current !== null) {
-      clearInterval(timerRef.current);
-      timerRef.current = null;
-    }
+    const job = current.current;
+    if (!job) return;
+    job.controller.abort();
+    // Original request disconnect remains authoritative if this arrives first.
+    void apiClient.controlRecording(job.id, 'cancel').catch(() => {});
   }, []);
 
-  // Cleanup on unmount
+  const stopRecording = useCallback(() => {
+    const job = current.current;
+    if (!job) return;
+    job.stop = true;
+    void apiClient.controlRecording(job.id, 'stop').catch(() => {});
+  }, []);
+
   useEffect(() => {
-    return () => {
-      if (timerRef.current !== null) {
-        clearInterval(timerRef.current);
-      }
-      streamRef.current?.getTracks().forEach((track) => {
-        track.stop();
-      });
-    };
-  }, []);
+    if (status.id === current.current?.id && status.phase === 'recording' && current.current.stop) {
+      stopRecording();
+    }
+  }, [status, stopRecording]);
 
-  return {
-    isRecording,
-    duration,
-    error,
-    startRecording,
-    stopRecording,
-    cancelRecording,
-  };
+  const startRecording = useCallback(async () => {
+    if (current.current || !activeRef.current) return;
+    const job = { id: crypto.randomUUID().replace(/-/g, ''), controller: new AbortController(), stop: false };
+    current.current = job;
+    useRecordingStore.getState().begin(job.id);
+    setError(null);
+    setIsRecording(true);
+    try {
+      const result = await apiClient.recordAudio(job.id, maxDurationSeconds, job.controller.signal);
+      if (!job.controller.signal.aborted && activeRef.current && current.current === job) {
+        callback.current?.(result.blob, result.duration);
+      }
+    } catch {
+      if (!job.controller.signal.aborted && activeRef.current) {
+        setError('Recording refused. Check microphone availability and session lock state.');
+      }
+    } finally {
+      if (current.current === job) {
+        current.current = null;
+        setIsRecording(false);
+      }
+    }
+  }, [maxDurationSeconds]);
+
+  useEffect(() => {
+    if (!active) cancelRecording();
+  }, [active, cancelRecording]);
+
+  useEffect(() => {
+    activeRef.current = active;
+    const hidden = () => { if (document.hidden) cancelRecording(); };
+    window.addEventListener('pagehide', cancelRecording);
+    document.addEventListener('visibilitychange', hidden);
+    return () => {
+      activeRef.current = false;
+      cancelRecording();
+      window.removeEventListener('pagehide', cancelRecording);
+      document.removeEventListener('visibilitychange', hidden);
+    };
+  }, [active, cancelRecording]);
+
+  return { isRecording, duration: status.duration, error,
+    startRecording, stopRecording, cancelRecording };
 }

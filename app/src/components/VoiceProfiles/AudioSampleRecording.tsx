@@ -1,25 +1,7 @@
 import { Mic, Pause, Play, Square } from 'lucide-react';
-import { memo, useEffect, useState } from 'react';
-import { Visualizer } from 'react-sound-visualizer';
 import { Button } from '@/components/ui/button';
 import { FormControl, FormItem, FormMessage } from '@/components/ui/form';
 import { formatAudioDuration } from '@/lib/utils/audio';
-
-const MemoizedWaveform = memo(function MemoizedWaveform({
-  audioStream,
-}: {
-  audioStream: MediaStream;
-}) {
-  return (
-    <div className="absolute inset-0 pointer-events-none flex items-center justify-center opacity-30">
-      <Visualizer audio={audioStream} autoStart strokeColor="#b39a3d">
-        {({ canvasRef }) => (
-          <canvas ref={canvasRef} width={500} height={150} className="w-full h-full" />
-        )}
-      </Visualizer>
-    </div>
-  );
-});
 
 interface AudioSampleRecordingProps {
   file: File | null | undefined;
@@ -32,7 +14,6 @@ interface AudioSampleRecordingProps {
   onPlayPause: () => void;
   isPlaying: boolean;
   isTranscribing?: boolean;
-  showWaveform?: boolean;
 }
 
 export function AudioSampleRecording({
@@ -46,42 +27,13 @@ export function AudioSampleRecording({
   onPlayPause,
   isPlaying,
   isTranscribing = false,
-  showWaveform = true,
 }: AudioSampleRecordingProps) {
-  const [audioStream, setAudioStream] = useState<MediaStream | null>(null);
-
-  // Request microphone access when component mounts
-  useEffect(() => {
-    if (!showWaveform) return;
-
-    let stream: MediaStream | null = null;
-
-    navigator.mediaDevices
-      .getUserMedia({ audio: true, video: false })
-      .then((s) => {
-        stream = s;
-        setAudioStream(s);
-      })
-      .catch(() => {
-        console.warn('VOICEBOX_MICROPHONE_VISUALIZATION_UNAVAILABLE');
-      });
-
-    return () => {
-      if (stream) {
-        stream.getTracks().forEach((track) => {
-          track.stop();
-        });
-      }
-    };
-  }, [showWaveform]);
-
   return (
     <FormItem>
       <FormControl>
         <div className="space-y-4">
           {!isRecording && !file && (
             <div className="relative flex flex-col items-center justify-center gap-4 p-4 border-2 border-dashed rounded-lg min-h-[180px] overflow-hidden">
-              {showWaveform && audioStream && <MemoizedWaveform audioStream={audioStream} />}
               <Button
                 type="button"
                 onClick={onStart}
@@ -92,14 +44,14 @@ export function AudioSampleRecording({
                 Start Recording
               </Button>
               <p className="relative z-10 text-sm text-muted-foreground text-center">
-                Click to start recording. Maximum duration: 30 seconds.
+                Click to use the shared system microphone for up to 30 seconds.
+                Recording does not grant permission to clone a voice.
               </p>
             </div>
           )}
 
           {isRecording && (
             <div className="relative flex flex-col items-center justify-center gap-4 p-4 border-2 border-accent rounded-lg bg-accent/5 min-h-[180px] overflow-hidden">
-              {showWaveform && audioStream && <MemoizedWaveform audioStream={audioStream} />}
               <div className="relative z-10 flex items-center gap-4">
                 <div className="flex items-center gap-2">
                   <div className="h-3 w-3 rounded-full bg-accent animate-pulse" />

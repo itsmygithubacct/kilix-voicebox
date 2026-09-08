@@ -2,6 +2,7 @@ import { RouterProvider } from '@tanstack/react-router';
 import { useEffect, useRef, useState } from 'react';
 import voiceboxLogo from '@/assets/voicebox-logo.png';
 import ShinyText from '@/components/ShinyText';
+import { RecordingIndicator } from '@/components/RecordingIndicator';
 import { TitleBarDragRegion } from '@/components/TitleBarDragRegion';
 import { TOP_SAFE_AREA_PADDING } from '@/lib/constants/ui';
 import { cn } from '@/lib/utils/cn';
@@ -161,7 +162,7 @@ function App() {
     );
   }
 
-  return <RouterProvider router={router} />;
+  return <><RouterProvider router={router} /><RecordingIndicator /></>;
 }
 
 export default App;
