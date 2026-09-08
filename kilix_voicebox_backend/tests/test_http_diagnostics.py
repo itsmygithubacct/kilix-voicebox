@@ -28,6 +28,7 @@ fixture for its setup behaviour only, which is where both findings live.
 from __future__ import annotations
 
 import ast
+import io
 import json
 import os
 from pathlib import Path
@@ -90,6 +91,31 @@ def load_actual_fixture():
 
 
 fixture = load_actual_fixture()
+
+
+class LogPrefixBoundaryTests(unittest.TestCase):
+    def test_earlier_redactions_cannot_pull_in_a_later_token_fragment(self):
+        # No setup or peer: exercise the actual reader on a controlled log.
+        # A token beginning AFTER the output boundary can be only partly read.
+        # Shortening earlier tokens must not pull that raw fragment back in.
+        token = b'0123456789abcdef' * 4
+        limit = fixture.MAX_LOG_BYTES
+        for earlier_tokens in (0, 1, 2, 4):
+            for offset in (-20, -1, 0, 1, 20, 63, 64):
+                with self.subTest(earlier_tokens=earlier_tokens, offset=offset):
+                    start = limit + offset
+                    payload = (token * earlier_tokens
+                               + b'Z' * (start - len(token) * earlier_tokens)
+                               + token + b'END')
+                    case = fixture.CaptureHTTPTests(
+                        'test_auth_origin_and_idle_status_never_open_microphone')
+                    case.token = token.decode('ascii')
+                    with io.BytesIO(payload) as log:
+                        case.log = log
+                        observed = case.read_server_log()
+                    self.assertLessEqual(len(observed), limit)
+                    for size in (1, 8, 16, 24, 32, 44, 64):
+                        self.assertNotIn(token[:size], observed)
 
 
 class ActualFixtureControl(unittest.TestCase):

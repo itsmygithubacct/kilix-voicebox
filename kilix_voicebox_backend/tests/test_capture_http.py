@@ -180,6 +180,8 @@ class CaptureHTTPTests(unittest.TestCase):
         so the bound and the redaction belong to the log itself rather than to
         one of its readers. Slightly more than the bound is read and redacted
         before trimming, so a token lying across the boundary is still removed.
+        Replacements keep their original width: shortening an earlier token
+        must not shift a partially read later token into the retained prefix.
         Arbitrary bytes are returned as bytes; callers decode with `replace`.
         """
         marker = self.token.encode('ascii')
@@ -188,7 +190,8 @@ class CaptureHTTPTests(unittest.TestCase):
             data = self.log.read(limit + len(marker))
         except (OSError, ValueError):
             return b''
-        return data.replace(marker, b'<redacted-session-token>')[:limit]
+        replacement = b'<redacted-session-token>'.ljust(len(marker), b' ')
+        return data.replace(marker, replacement)[:limit]
 
     def _retain_readiness_context(self):
         """Best effort: write one bounded, token-free record. Never raises.
