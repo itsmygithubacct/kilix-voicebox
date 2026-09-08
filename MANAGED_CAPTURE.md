@@ -26,6 +26,14 @@ share one absolute limit of the requested seconds plus a fixed two-second
 cleanup margin, within Voice's 120-second ceiling. That limit is not renewed.
 The browser also bounds the complete recording request by seconds plus six.
 
+The original deadline and Stop/Cancel/connection loss remain actionable while
+the ordinary executor is busy. An atomic entry gate abandons unstarted work,
+so a stale queued callable cannot open a recorder after its claim is released.
+Stop before entry refuses an empty recording. Once entry wins, the waiter keeps
+the claim through actual completion even if submission fails or its HTTP task
+is cancelled. A cancelled or failed future alone is never cleanup proof. The
+shared executor's capacity and the original recording budget are unchanged.
+
 `/recording/status` is passive: starting, recording, stopping, inactive or
 unavailable, opaque active/last-completed IDs and PCM duration only. Inactive
 means this bridge has no recording, not that a device used by another program

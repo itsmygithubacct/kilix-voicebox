@@ -37,33 +37,76 @@ def _voice():
         raise CaptureRefusal("MICROPHONE_UNAVAILABLE") from None
 
 
-async def until_disconnected(request, function, gone: threading.Event):
+class _QueuedOperation:
+    """Entry/abandon proof independent of executor or asyncio future state."""
+    def __init__(self, function):
+        self._function = function
+        self._mutex = threading.Lock()
+        self._entered = False
+        self._abandoned = False
+        self._finished = False
+
+    def __call__(self):
+        with self._mutex:
+            if self._abandoned or self._entered:
+                raise CaptureRefusal("RECORDING_REFUSED")
+            self._entered = True
+        try:
+            return self._function()
+        finally:
+            with self._mutex:
+                self._finished = True
+
+    def abandon(self):
+        with self._mutex:
+            if self._entered:
+                return False
+            self._abandoned = True
+            return True
+
+    def settled(self):
+        with self._mutex:
+            return self._abandoned or self._finished
+
+
+async def until_disconnected(request, function, gone: threading.Event, *, pending_cancelled=None,
+                             stopped_code="TRANSCRIPTION_STOPPED"):
     """Retain the owned operation until it returns, even on task cancellation.
 
     The operation must observe gone and have its own absolute deadline. A closed
     HTTP request is cancellation authority, never evidence of provider cleanup.
     """
-    task = asyncio.create_task(asyncio.to_thread(function))
+    owned = _QueuedOperation(function)
+    operation = task = None
     try:
+        operation = asyncio.to_thread(owned)
+        task = asyncio.create_task(operation)
         while not task.done():
             if await request.is_disconnected():
                 gone.set()
+            if (gone.is_set() or (pending_cancelled is not None and pending_cancelled())) and owned.abandon():
+                raise CaptureRefusal(stopped_code)
             await asyncio.wait({task}, timeout=0.05)
         return task.result()
     except BaseException:
         gone.set()
         raise
     finally:
-        # Shield prevents cancellation of the future from hiding a live owner.
-        while not task.done():
+        # A failed submit may already have queued/started the callable. Only
+        # this gate, never a future's cancellation/exception, proves no owner.
+        abandoned = owned.abandon()
+        if task is None:
+            if operation is not None:
+                operation.close()
+        elif abandoned:
+            task.cancel()
+        while not owned.settled() or (task is not None and not task.done()):
             try:
-                await asyncio.shield(task)
+                await asyncio.sleep(0.01)
             except asyncio.CancelledError:
                 gone.set()
                 continue
-            except Exception:
-                break
-        if task.done() and not task.cancelled():
+        if task is not None and task.done() and not task.cancelled():
             task.exception()
 
 

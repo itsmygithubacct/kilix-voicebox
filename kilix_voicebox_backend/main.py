@@ -964,13 +964,16 @@ async def recording_cancel(identifier: str):
 @app.post("/recording")
 async def recording_start(data: RecordingInput, request: Request):
     gone = threading.Event()
+    bridge = _capture_bridge
     item = None
     response = None
     try:
         try:
-            item = _capture_bridge.claim(data.id, data.seconds, gone)
-            payload = await until_disconnected(request, lambda: _capture_bridge.record(
-                item, defer_delivery=True), gone)
+            item = bridge.claim(data.id, data.seconds, gone)
+            payload = await until_disconnected(request, lambda: bridge.record(
+                item, defer_delivery=True), gone, pending_cancelled=lambda: (
+                    item.cancel.is_set() or item.stop.is_set() or time.monotonic() >= item.deadline),
+                stopped_code="RECORDING_REFUSED")
             if await request.is_disconnected():
                 gone.set()
                 raise CaptureRefusal("RECORDING_STOPPED")
@@ -981,7 +984,7 @@ async def recording_start(data: RecordingInput, request: Request):
                 # This is the final handler decision, after worker/waiter
                 # cleanup and response construction. Cancel remains actionable
                 # until this same-control acceptance/refusal releases the ID.
-                _capture_bridge.finalize(item, deliver=response is not None)
+                bridge.finalize(item, deliver=response is not None)
         return response
     except CaptureRefusal as error:
         raise HTTPException(409, detail={"code": error.code}) from None
