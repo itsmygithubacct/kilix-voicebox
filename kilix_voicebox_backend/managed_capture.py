@@ -50,13 +50,16 @@ async def until_disconnected(request, function, gone: threading.Event):
                 gone.set()
             await asyncio.wait({task}, timeout=0.05)
         return task.result()
-    finally:
+    except BaseException:
         gone.set()
+        raise
+    finally:
         # Shield prevents cancellation of the future from hiding a live owner.
         while not task.done():
             try:
                 await asyncio.shield(task)
             except asyncio.CancelledError:
+                gone.set()
                 continue
             except Exception:
                 break
@@ -78,6 +81,8 @@ class RecordingRequest:
         self.duration = 0.0
         self.phase = "starting"
         self.entered = False
+        self.completed = False
+        self.control = None
 
 
 class CaptureBridge:
@@ -139,9 +144,56 @@ class CaptureBridge:
                 self._active = None
                 self._last_id = item.identifier
 
-    def record(self, item: RecordingRequest) -> bytes:
+    def finalize(self, item: RecordingRequest, *, deliver: bool = False):
+        """Accept/refuse delivery after cleanup, then release this exact claim.
+
+        The same mutex orders accepted cancellation and final delivery. There
+        is no process teardown or external callback after the authority check.
+        A pending executor must finish before its caller can release ownership.
+        """
         with self._mutex:
+            if self._active is not item:
+                if deliver:
+                    raise CaptureRefusal("RECORDING_NOT_ACTIVE")
+                return
+            if item.entered and not item.completed:
+                item.cancel.set()
+                raise CaptureRefusal("RECORDING_PENDING")
+            try:
+                if deliver:
+                    if self._unavailable or self._closing or item.control is None:
+                        raise CaptureRefusal("MICROPHONE_UNAVAILABLE")
+                    item.control.check()
+            except CaptureRefusal:
+                raise
+            except Exception:
+                raise CaptureRefusal("RECORDING_REFUSED") from None
+            finally:
+                self._active = None
+                self._last_id = item.identifier
+
+    def record(self, item: RecordingRequest, *, defer_delivery: bool = False) -> bytes:
+        """Prepare a WAV; HTTP retains its claim until explicit finalization.
+
+        Direct callers receive the same checked bytes/finished-state contract.
+        All authority checks below run after _record's final cleanup completes.
+        """
+        with self._mutex:
+            if self._active is not item or item.entered:
+                raise CaptureRefusal("RECORDING_NOT_ACTIVE")
             item.entered = True
+        try:
+            payload = self._record(item)
+            item.completed = True
+            if not defer_delivery:
+                self.finalize(item, deliver=True)
+            return payload
+        except BaseException:
+            item.completed = True
+            self.finalize(item)
+            raise
+
+    def _record(self, item: RecordingRequest) -> bytes:
         capture = None
         proven = True
         pcm = bytearray()
@@ -166,6 +218,7 @@ class CaptureBridge:
             if self._namespace is not None:
                 kwargs["namespace"] = self._namespace
             control = microphone.CaptureControl(item.deadline, **kwargs)
+            item.control = control
             control.check()
             if item.stop.is_set():
                 raise CaptureRefusal("RECORDING_EMPTY")
@@ -212,9 +265,6 @@ class CaptureBridge:
                 with self._mutex:
                     if not proven:
                         self._unavailable = True
-                    if self._active is item:
-                        self._active = None
-                        self._last_id = item.identifier
                 if not proven:
                     raise CaptureRefusal("MICROPHONE_UNAVAILABLE") from None
 

@@ -49,6 +49,18 @@ leaves this bridge unavailable and retains Voice's persistent quarantine; no
 context exit, missing process or cancel acknowledgement clears that grant. A
 fresh bridge still encounters that grant through Voice's unchanged acquire API.
 
+The same recording control survives WAV serialization and the final capture
+cleanup. HTTP keeps the active ID until the handler accepts or refuses delivery,
+after waiting for the operation and constructing its response. Accepted Cancel
+requests remain ordered with that final decision; no successor can overlap this
+pending claim. Successful operation completion does not mark its HTTP receiver
+disconnected. Task cancellation or actual disconnection still signals loss and
+awaits the owned operation before releasing its claim.
+
+Voice's actual logind adapter caches answers for up to 100 ms and bounds each
+query to 150 ms. Rechecking the same adapter retains that declared behavior;
+synthetic boundary tests do not establish instantaneous physical-lock detection.
+
 The existing Record → preview → **Transcribe** flow remains explicit. Managed
 recorded audio cannot be submitted before cleanup because it is not delivered
 before that proof. Transcribe also continues to accept existing file uploads.

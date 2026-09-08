@@ -965,20 +965,28 @@ async def recording_cancel(identifier: str):
 async def recording_start(data: RecordingInput, request: Request):
     gone = threading.Event()
     item = None
+    response = None
     try:
-        item = _capture_bridge.claim(data.id, data.seconds, gone)
-        payload = await until_disconnected(request, lambda: _capture_bridge.record(item), gone)
-        if await request.is_disconnected():
-            raise CaptureRefusal("RECORDING_STOPPED")
-        return Response(payload, media_type="audio/wav", headers={
-            "Cache-Control": "no-store", "X-Kilix-Recording-Duration": str(item.duration)})
+        try:
+            item = _capture_bridge.claim(data.id, data.seconds, gone)
+            payload = await until_disconnected(request, lambda: _capture_bridge.record(
+                item, defer_delivery=True), gone)
+            if await request.is_disconnected():
+                gone.set()
+                raise CaptureRefusal("RECORDING_STOPPED")
+            response = Response(payload, media_type="audio/wav", headers={
+                "Cache-Control": "no-store", "X-Kilix-Recording-Duration": str(item.duration)})
+        finally:
+            if item is not None:
+                # This is the final handler decision, after worker/waiter
+                # cleanup and response construction. Cancel remains actionable
+                # until this same-control acceptance/refusal releases the ID.
+                _capture_bridge.finalize(item, deliver=response is not None)
+        return response
     except CaptureRefusal as error:
         raise HTTPException(409, detail={"code": error.code}) from None
     except Exception:
         raise HTTPException(503, detail={"code": "RECORDING_FAILED"}) from None
-    finally:
-        if item is not None:
-            _capture_bridge.abandon_unstarted(item)
 
 
 @app.post("/transcribe", response_model=models.TranscriptionResponse)
