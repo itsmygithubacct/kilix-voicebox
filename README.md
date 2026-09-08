@@ -75,6 +75,17 @@ binary length, provider endpoints, and the absence of an embedded model runtime.
 The build runs the locked PyInstaller environment without inheriting Python
 startup variables or user uv configuration.
 
+Each run owns one staging directory, `kilix_voicebox_backend/build/stage-<id>`,
+which the producer creates and the script removes when it exits. The producer
+finishes by writing a handoff naming and hashing exactly the outputs of that
+run, and the script installs into `tauri/src-tauri/binaries/` only what the
+handoff names, after checking the build identity, the digests and that neither
+source nor destination is a symbolic link. A build that fails or produces
+nothing therefore installs nothing: no earlier binary or provenance can be
+picked up in its place. `kilix_voicebox_backend/build_binary.py` can also be run
+directly, but it requires `--stage-dir` naming a directory that does not yet
+exist.
+
 ## Local API
 
 Voicebox serves the product API on `http://127.0.0.1:17493`. A voice-cloning

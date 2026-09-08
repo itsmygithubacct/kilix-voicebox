@@ -50,7 +50,9 @@ bun run --cwd tauri build
 For native changes, also run `cargo check --locked` in `tauri/src-tauri` on a
 host with the Tauri system development packages installed. Build the backend
 sidecar only from the committed source and lockfile using
-`scripts/build-server.sh`.
+`scripts/build-server.sh`, which owns one staging directory per run and installs
+only the outputs that run's handoff names and hashes. Do not add a path that
+lets the collector select a file some other build produced.
 
 Keep generated media, imported samples, consent records, provenance records,
 databases, caches, credentials, and built sidecars out of Git.

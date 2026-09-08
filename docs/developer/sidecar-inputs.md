@@ -113,13 +113,53 @@ the production CLI/API, exact population, notice/helper refusal, archive
 structure, source/wheel substitution, poisoned environment, output refusal,
 interruption and mutation during staging. Test process fixtures are synthetic.
 
-Remaining integration includes the sidecar output-path correction (G1),
-PyInstaller/tool/dependency closure and consumption of this manifest (G2/G3),
-shipping the helper/VERSION/licenses and extending final binary provenance
-(G3), catalog and host installation/provider staging (G4), and the exact
-private provider interpreter/dependency environment plus OS installation (G5).
-The original curated-import gate also fixes its control population at four
-files: these two assigned new `.kilix-import` files require a separately
-reviewed integration update to that gate. This component leaves its existing
-assertions unchanged. No model, physical capture, built-sidecar, media,
-upgrade or release qualification follows from a successful stage.
+The production builder consumes this stage with explicit arguments:
+
+```sh
+"$pinned_python_home/bin/python3.12" -I -B -S \
+  kilix_voicebox_backend/build_binary.py \
+  --stage-dir "$fresh_build_directory" --build-id "$invocation_id" \
+  --voice-source "$voice_source" --transcribe-source "$transcribe_source" \
+  --transcribe-wheel "$transcribe_wheel" \
+  --wheelhouse "$original_locked_software_wheels" \
+  --python-home "$pinned_python_home"
+```
+
+All inputs must be explicit absolute local paths. The fresh build directory
+must be outside the clean product checkout and below existing nonsymbolic
+directories. The wheel directory contains exactly one original archive for
+each selected Linux x86_64 CPython3.12 runtime/build-group distribution in the
+unchanged lock. Whole archive hashes/sizes and complete RECORD populations
+are checked before staging. There is no acquisition, cache fallback or version
+substitution. CPython3.12.8 and PyInstaller6.15.0 remain fixed.
+
+The producer binds clean raw Git source, all19 selected payloads, the complete
+selected interpreter/package/tool population and original wheel archives.
+A sealed memory file carries that population into a private namespace with
+network isolation. Package code executes only after the selected files are
+mounted read-only; separate writable output has a1GiB limit and the original
+240-second build deadline includes preparation. The caller must also enforce
+the documented external memory/process/CPU/time limits. Original inputs and
+the staged projection are checked before and after execution; periodic checks
+detect identity changes during execution. Immutable consumed bytes remain
+protected even when filesystem timestamp granularity hides a transient change.
+
+Actual PyInstaller output is inspected with the selected archive reader:
+15 extracted code objects are compared to compiled selected sources, and the
+four plaintext helper/VERSION/notice files are compared byte for byte. The
+complete extractable archive population is bound. The v2 provenance schema,
+strict metadata policy and consumer obligations are fixed in
+[the build contract](sidecar-build-contract.md). The separate output-handoff
+schema stays v1 and is published last; failures retain their private stage
+without a successful handoff. The private original-wheel receipt distinguishes
+archive hashes from the complete installed-member identities in provenance.
+
+The current import gate explicitly selects the two C19 control files with
+fixed paths, modes, sizes and digests. Its historical four-file import record
+and source provenance remain unchanged; no additional control is accepted by
+enumeration. Missing, extra or changed current selections refuse.
+
+Collector invocation forwarding, Tauri resources, catalog/provider staging,
+the private provider runtime and OS installation remain separate integration
+gates. Successful staging or building does not qualify models, physical
+capture, provider delivery, media, upgrade or release behavior.

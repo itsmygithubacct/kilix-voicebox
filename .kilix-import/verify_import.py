@@ -36,6 +36,7 @@ EXPECTED_PROVENANCE_KEYS = {
     "publication",
     "expected_source_risks",
     "hygiene_delta",
+    "current_controls",
 }
 EXPECTED_EVIDENCE = [
     {
@@ -57,6 +58,25 @@ EXPECTED_CONTROL_PATHS = [
     ".kilix-import/test_verify_import.py",
     ".kilix-import/verify_import.py",
 ]
+EXPECTED_CURRENT_CONTROLS = {
+    "schema": "kilix.voicebox.current-controls/v1",
+    "historical_import_commit": EXPECTED_IMPORT_COMMIT,
+    "additional": [
+        {
+            "path": ".kilix-import/sidecar-inputs.json",
+            "git_mode": "100644",
+            "bytes": 14795,
+            "sha256": "63a8498f47b1c8c1daf78a4d62b3f98bb6ba53a29f8caeb9929395163b5f2d8e",
+        },
+        {
+            "path": ".kilix-import/test_sidecar_inputs.py",
+            "git_mode": "100644",
+            "bytes": 17641,
+            "sha256": "823b2ab9f4fa3bef4d8d565878a44cf9f228d7084f88a5fdb46afb5ceb7c01a1",
+        },
+    ],
+}
+
 EXPECTED_HISTORICAL_MATCH_PROOF = {
     "status": "MEASURED_NOT_ADJUDICATED",
     "independent_adjudications": 0,
@@ -242,7 +262,13 @@ def repository_root(start: Path | None = None) -> Path:
 
 
 def load_provenance(root: Path) -> dict[str, Any]:
-    return json.loads(git(root, "show", f"HEAD:{PROVENANCE_REL}").stdout)
+    def unique(rows):
+        result = {}
+        for key, value in rows:
+            require(key not in result, "PROVENANCE_DUPLICATE", "duplicate provenance key")
+            result[key] = value
+        return result
+    return json.loads(git(root, "show", f"HEAD:{PROVENANCE_REL}").stdout, object_pairs_hook=unique)
 
 
 def validate_provenance(provenance: dict[str, Any]) -> None:
@@ -252,6 +278,8 @@ def validate_provenance(provenance: dict[str, Any]) -> None:
             "PROVENANCE_SCHEMA", "provenance schema identity drifted")
     require(provenance.get("status") == EXPECTED_STATUS,
             "PROVENANCE_STATUS", "import must not claim P8 or acceptance")
+    require(provenance.get("current_controls") == EXPECTED_CURRENT_CONTROLS,
+            "CURRENT_CONTROL_CONTRACT", "current control selection drifted")
     upstream = provenance.get("upstream", {})
     expected_upstream = {
         "url": "https://github.com/jamiepine/voicebox.git",
@@ -377,6 +405,22 @@ def validate_provenance(provenance: dict[str, Any]) -> None:
 
 def risk_paths(paths: Iterable[str]) -> list[str]:
     return sorted(path for path in paths if RISK_PATTERN.search(path))
+
+
+def verify_current_controls(root: Path, owned: list[str], selection: dict[str, Any]) -> None:
+    require(selection == EXPECTED_CURRENT_CONTROLS,
+            "CURRENT_CONTROL_CONTRACT", "current control selection drifted")
+    expected = sorted(EXPECTED_CONTROL_PATHS + [row["path"] for row in selection["additional"]])
+    require(owned == expected, "OWNED_POPULATION",
+            "current control population differs from the explicit 4 historical + 2 current paths")
+    for row in selection["additional"]:
+        raw = git(root, "ls-tree", "-z", "HEAD", "--", row["path"]).stdout
+        prefix = row["git_mode"].encode() + b" blob "
+        require(raw.startswith(prefix) and raw.endswith(b"\t" + row["path"].encode() + b"\0")
+                and raw.count(b"\0") == 1, "CURRENT_CONTROL_MODE", "current control mode drifted")
+        data = git_blob(root, "HEAD", row["path"])
+        require(len(data) == row["bytes"] and sha256_bytes(data) == row["sha256"],
+                "CURRENT_CONTROL_BYTES", "current control bytes drifted")
 
 
 def tracked_paths(root: Path, revision: str = "HEAD") -> list[str]:
@@ -900,8 +944,7 @@ def verify_current_repository(root: Path, provenance: dict[str, Any]) -> dict[st
     )
     owned = sorted(path for path in current_paths if path.startswith(OWNED_PREFIX))
     source = sorted(path for path in current_paths if not path.startswith(OWNED_PREFIX))
-    require(owned == provenance["import"]["control_paths"], "OWNED_POPULATION",
-            "current import control population differs from 4/4")
+    verify_current_controls(root, owned, provenance["current_controls"])
     current_risks = risk_paths(source)
     require(not current_risks, "CURRENT_RISK_POPULATION",
             f"current product tree contains forbidden artifact paths: {current_risks!r}")
@@ -989,7 +1032,7 @@ def run() -> None:
         f"{counts['historical_adjudications']}/1 independent historical adjudications; "
         f"{counts['platform_resource_configs']}/1 macOS-only resource config; "
         f"{counts['scanner_exception_candidates']}/0 scanner exceptions required; "
-        f"{counts['owned_files']}/4 import-control files; "
+        f"{counts['owned_files']}/6 current control files (4 historical + 2 selected); "
         f"{counts['current_blob_paths']}/{counts['current_blob_paths']} current blob leaves; "
         f"{counts['current_blob_bytes']}/{counts['current_blob_bytes']} current blob bytes; "
         f"{counts['current_worktree_blobs']}/{counts['current_blob_paths']} "

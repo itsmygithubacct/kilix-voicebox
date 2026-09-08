@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
 import os
 import shlex
 import subprocess
@@ -81,6 +82,51 @@ class CuratedImportTests(unittest.TestCase):
         self.assertLessEqual(counts["remotes"], 1)
         self.assertEqual(counts["remote_fetch_urls"], counts["remotes"])
         self.assertEqual(counts["remote_push_urls"], counts["remotes"])
+
+    def test_current_control_selection_preserves_historical_record(self):
+        historical = json.loads(verify.git(self.root, "show", "634d6ed0efa49548afd372961cd917391500a9b3:.kilix-import/PROVENANCE.json").stdout)
+        current = copy.deepcopy(self.provenance)
+        self.assertEqual(current.pop("current_controls"), verify.EXPECTED_CURRENT_CONTROLS)
+        self.assertEqual(current, historical)
+        self.assertEqual(len(verify.EXPECTED_CONTROL_PATHS), 4)
+
+    def test_current_control_missing_extra_and_selection_drift_refuse(self):
+        selected = copy.deepcopy(verify.EXPECTED_CURRENT_CONTROLS)
+        paths = sorted(verify.EXPECTED_CONTROL_PATHS + [r["path"] for r in selected["additional"]])
+        for population in (paths[:-1], sorted(paths + [".kilix-import/unselected.json"])):
+            with self.subTest(population=population), self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_current_controls(self.root, population, selected)
+            self.assertEqual(caught.exception.code, "OWNED_POPULATION")
+        for changed in (dict(selected, extra=True), dict(selected, additional=selected["additional"][:1])):
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_current_controls(self.root, paths, changed)
+            self.assertEqual(caught.exception.code, "CURRENT_CONTROL_CONTRACT")
+
+    def test_current_selected_git_bytes_and_mode_are_bound(self):
+        selected = copy.deepcopy(verify.EXPECTED_CURRENT_CONTROLS)
+        paths = sorted(verify.EXPECTED_CONTROL_PATHS + [r["path"] for r in selected["additional"]])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.initialize_repository(root)
+            for row in selected["additional"]:
+                path = root / row["path"]
+                path.parent.mkdir(exist_ok=True)
+                path.write_bytes((self.root / row["path"]).read_bytes())
+            self.commit_all(root)
+            verify.verify_current_controls(root, paths, selected)
+            changed = root / selected["additional"][0]["path"]
+            original = changed.read_bytes()
+            changed.write_bytes(original + b"\n")
+            self.commit_all(root)
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_current_controls(root, paths, selected)
+            self.assertEqual(caught.exception.code, "CURRENT_CONTROL_BYTES")
+            changed.write_bytes(original)
+            changed.chmod(0o755)
+            self.commit_all(root)
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_current_controls(root, paths, selected)
+            self.assertEqual(caught.exception.code, "CURRENT_CONTROL_MODE")
 
     def test_historical_match_measurement_is_reproducible(self) -> None:
         boundary = self.provenance["hygiene_delta"]["generated_binary_boundary"]
@@ -485,19 +531,55 @@ class CuratedImportTests(unittest.TestCase):
             )
             rustc.chmod(0o755)
 
+            # The stand-in producer takes its output location from the
+            # arguments the build script passed it, and writes the handoff that
+            # script collects from. A stub that wrote to a path of its own
+            # choosing would prove the environment filter while concealing the
+            # producer/consumer contract, which is how the real output-path
+            # mismatch survived this control.
             uv = tools / "uv"
             uv.write_text(
-                "#!/bin/sh\n"
-                "set -eu\n"
-                "test \"${PYTHONNOUSERSITE-}\" = 1\n"
-                "test \"${PYTHONSAFEPATH-}\" = 1\n"
-                "python3 -c 'from pathlib import Path; "
-                "root = Path.cwd(); "
-                "dist = root / \"backend\" / \"dist\"; "
-                "dist.mkdir(parents=True); "
-                "(dist / \"voicebox-server\").write_bytes(b\"sidecar\"); "
-                "(dist / \"voicebox-server.provenance.json\").write_text("
-                "\"{}\\n\", encoding=\"utf-8\")'\n",
+                """#!/bin/sh
+set -eu
+test "${PYTHONNOUSERSITE-}" = 1
+test "${PYTHONSAFEPATH-}" = 1
+stage=
+build_id=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --stage-dir) stage=$2; shift 2 ;;
+        --build-id) build_id=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+test -n "$stage"
+test -n "$build_id"
+test ! -e "$stage"
+python3 - "$stage" "$build_id" <<'PRODUCER'
+import hashlib
+import sys
+from pathlib import Path
+
+stage = Path(sys.argv[1])
+build_id = sys.argv[2]
+dist = stage / "dist"
+dist.mkdir(parents=True)
+binary = dist / "voicebox-server"
+binary.write_bytes(b"sidecar")
+provenance = dist / "voicebox-server.provenance.json"
+provenance.write_text("{}\\n", encoding="utf-8")
+(stage / "sidecar-outputs").write_text(
+    "schema=kilix.voicebox.sidecar-output/candidate-v1\\n"
+    f"build_id={build_id}\\n"
+    "binary=dist/voicebox-server\\n"
+    f"binary_sha256={hashlib.sha256(binary.read_bytes()).hexdigest()}\\n"
+    f"binary_bytes={binary.stat().st_size}\\n"
+    "provenance=dist/voicebox-server.provenance.json\\n"
+    f"provenance_sha256={hashlib.sha256(provenance.read_bytes()).hexdigest()}\\n",
+    encoding="ascii",
+)
+PRODUCER
+""",
                 encoding="utf-8",
             )
             uv.chmod(0o755)
@@ -526,6 +608,14 @@ class CuratedImportTests(unittest.TestCase):
             self.assertEqual(
                 copied.with_suffix(".provenance.json").read_text(encoding="utf-8"),
                 "{}\n",
+            )
+            # The collected bytes came from the staging directory the script
+            # named for this invocation and nowhere else: the pre-rename
+            # `backend/dist` path is never created, and the staging directory
+            # does not survive the build that owned it.
+            self.assertFalse((root / "backend").exists())
+            self.assertEqual(
+                sorted((root / "kilix_voicebox_backend" / "build").iterdir()), []
             )
 
     def test_repository_shape_refuses_hidden_index_paths(self) -> None:
