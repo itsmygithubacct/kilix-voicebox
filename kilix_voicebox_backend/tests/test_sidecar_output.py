@@ -24,7 +24,6 @@ import os
 import signal
 import stat
 import subprocess
-import sys
 import tempfile
 import unittest
 from pathlib import Path

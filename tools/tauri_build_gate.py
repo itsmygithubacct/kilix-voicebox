@@ -25,7 +25,6 @@ Exit status: 0 gate passed, 2 refused, 3 missing authority.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from pathlib import Path
 import subprocess
