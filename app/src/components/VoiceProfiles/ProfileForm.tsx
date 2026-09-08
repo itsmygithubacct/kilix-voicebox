@@ -609,12 +609,12 @@ export function ProfileForm() {
         <div className="max-w-5xl max-h-[85vh] mx-auto my-auto w-full flex flex-col">
           <DialogHeader>
             <DialogTitle className="text-2xl">
-              {editingProfileId ? 'Edit Voice' : 'Clone voice'}
+              {editingProfileId ? 'Edit Voice' : 'Create voice profile'}
             </DialogTitle>
             <DialogDescription>
               {editingProfileId
                 ? 'Update your voice profile details and manage samples.'
-                : 'Create a new voice profile with an audio sample to clone the voice.'}
+                : 'Create a profile for generation history. Add a consented sample when you want to clone a voice.'}
             </DialogDescription>
             {isCreating && profileFormDraft && (
               <div className="flex items-center gap-2 pt-2">
