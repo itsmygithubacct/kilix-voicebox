@@ -25,8 +25,10 @@ Exit status: 0 gate passed, 2 refused, 3 missing authority.
 from __future__ import annotations
 
 import argparse
+import json
 import os
 from pathlib import Path
+import subprocess
 import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -54,6 +56,42 @@ def main(argv=None):
     parser.add_argument('--platform', default=os.environ.get('VOICEBOX_SIDECAR_PLATFORM'))
     options = parser.parse_args(argv)
 
+    # tools/build_sidecar.py runs the producer once and then the consumer, and
+    # marks the build it just verified. The receipt beside the published
+    # resources must name that same invocation, so this is a check of work
+    # already done rather than a discovered file being trusted, and the
+    # producer is not invoked a second time for the same package build.
+    passed = os.environ.get('VOICEBOX_SIDECAR_GATE_PASSED')
+    if passed:
+        receipt = ROOT / 'tauri/src-tauri/resources/sidecar/RESOURCES.json'
+        if receipt.is_symlink() or not receipt.is_file():
+            return refuse('the gate was reported as passed but no resource receipt exists', 2)
+        try:
+            recorded = json.loads(receipt.read_text(encoding='utf-8'))['build_id']
+        except (OSError, ValueError, KeyError):
+            return refuse('the resource receipt is unreadable', 2)
+        if recorded != passed:
+            return refuse('the resource receipt names build %s, not this build %s'
+                          % (recorded, passed), 2)
+        print('voicebox: sidecar gate already passed for build ' + passed)
+        return 0
+
+    # A standalone Tauri release build reaches the same safe path: it runs the
+    # whole bridge itself rather than packaging whatever is already installed.
+    # Without explicit inputs it refuses; it never falls back to stale outputs.
+    orchestrator = [sys.executable, '-I', str(ROOT / 'tools/build_sidecar.py')]
+    if options.platform:
+        orchestrator += ['--platform', options.platform]
+    status = subprocess.run(orchestrator, cwd=ROOT, check=False).returncode
+    if status:
+        return refuse('the standalone sidecar build did not complete', status)
+    print('voicebox: sidecar gate passed; resources prepared for packaging')
+    return 0
+
+
+def legacy_main(argv=None):
+    """Retained explicit-artifact path, used by the controls below."""
+    options = argparse.Namespace(platform=os.environ.get('VOICEBOX_SIDECAR_PLATFORM'))
     handoff = os.environ.get('VOICEBOX_SIDECAR_HANDOFF')
     build_id = os.environ.get('VOICEBOX_SIDECAR_BUILD_ID')
     if not handoff and not build_id:

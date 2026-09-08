@@ -98,7 +98,8 @@ dev-web: ## Start backend + web app (parallel)
 # BUILD
 # =============================================================================
 
-.PHONY: build build-server build-tauri build-web sidecar-gate
+.PHONY: build build-server build-tauri build-web sidecar-gate build-sidecar \
+	build-sidecar-and-package
 
 # `build-server` publishes the sidecar and `build-tauri` packages it, so they
 # were never independent: as plain prerequisites `make -j build` could package
@@ -106,14 +107,31 @@ dev-web: ## Start backend + web app (parallel)
 # here, and the Tauri build hook independently refuses to reach a package step
 # without a passing sidecar gate, so no route can package a sidecar this build
 # did not publish and verify.
-build: ## Build everything (server binary + desktop app)
-	@$(MAKE) --no-print-directory build-server
-	@$(MAKE) --no-print-directory build-tauri
+build: ## Build everything (sidecar + verified resources + desktop app)
+	@$(MAKE) --no-print-directory build-sidecar-and-package
 	@echo -e "$(GREEN)✓ Build complete!$(NC)"
 
-build-server: ## Build Python server binary
-	@echo -e "$(BLUE)Building server binary...$(NC)"
-	PATH="$(VENV_BIN):$$PATH" ./scripts/build-server.sh
+# One producer invocation, then packaging, in one process. The packaging step
+# is told which build the gate passed for, so the Tauri hook verifies that work
+# instead of repeating the producer.
+build-sidecar-and-package:
+	$(PYTHON) -I tools/build_sidecar.py --package 'cd $(TAURI_DIR) && bun run tauri build'
+
+# The whole bridge: a new invocation identity, the clean product commit and
+# tree, every explicit selected input, one producer run, then the consumer --
+# and only then packaging. It refuses and explains rather than choosing inputs.
+build-sidecar: ## Build and verify the sidecar from explicit selected inputs
+	@echo -e "$(BLUE)Building the sidecar from explicit selected inputs...$(NC)"
+	$(PYTHON) -I tools/build_sidecar.py
+
+# Developer path: run the collector directly with inputs you name yourself. It
+# produces and publishes the pair but runs no consumer and prepares no Tauri
+# resources, so it is for producing and inspecting a sidecar, never for
+# packaging a release. Use `make build` for that.
+build-server: ## Collector only, explicit inputs (no consumer, not packageable)
+	@echo -e "$(BLUE)Building server binary (collector only)...$(NC)"
+	@echo -e "$(YELLOW)No consumer runs on this path; it does not make a bundle packageable.$(NC)"
+	./scripts/build-server.sh $(BUILD_SERVER_ARGS)
 
 # The same gate the Tauri build hook runs, exposed for operators and controls.
 # It verifies the installed sidecar identity and prepares the bundle resources;

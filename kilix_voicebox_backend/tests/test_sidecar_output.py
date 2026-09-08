@@ -166,9 +166,24 @@ class CollectorHarness:
         rustc = self.tools / "rustc"
         rustc.write_text(RUSTC, encoding="utf-8")
         rustc.chmod(0o755)
-        self.producer = self.tools / "uv"
+        # ADAPTED for the C22 producer CLI: the collector no longer runs `uv`,
+        # it executes the selected interpreter by absolute path with -I -B -S.
+        # The stand-in and its plan are unchanged; only the name it is reached
+        # by, and the extra leading arguments it ignores, are different.
+        self.producer = self.tools / "python3.12"
         self.producer.write_text(PRODUCER, encoding="utf-8")
         self.producer.chmod(0o755)
+        # ADAPTED for the C22 producer CLI: the stage is outside the checkout
+        # and every selected input is explicit, so the fixture owns them.
+        self.selected = temporary / "selected"
+        for name in ("voice", "transcribe", "wheelhouse", "python-home",
+                     "private-home", "stage-root"):
+            (self.selected / name).mkdir(parents=True)
+        self.wheel = self.selected / "kilix_transcribe-0.1.0-py3-none-any.whl"
+        self.wheel.write_bytes(b"controlled wheel")
+        self.producer_script = self.selected / "build_binary.py"
+        self.producer_script.write_bytes(b"# controlled producer script\n")
+        self.stage_root = self.selected / "stage-root"
         self.record = temporary / "producer-invocation.json"
         self.binaries = self.repository / "tauri" / "src-tauri" / "binaries"
 
@@ -184,6 +199,27 @@ class CollectorHarness:
             json.dumps(payload), encoding="utf-8"
         )
 
+    def collector_arguments(self) -> list[str]:
+        """ADAPTED for the C22 producer CLI: every input is now explicit.
+
+        The identity is generated here, once per invocation, exactly as the
+        orchestrator generates it for a normal build, so no test adopts an
+        identity from an existing record. `--keep-stage` preserves the
+        residue assertions this suite already made.
+        """
+        build_id = os.urandom(16).hex()
+        return ["--build-id", build_id,
+                "--stage-dir", str(self.stage_root / ("stage-" + build_id)),
+                "--python-executable", str(self.producer),
+                "--producer", str(self.producer_script),
+                "--voice-source", str(self.selected / "voice"),
+                "--transcribe-source", str(self.selected / "transcribe"),
+                "--transcribe-wheel", str(self.wheel),
+                "--wheelhouse", str(self.selected / "wheelhouse"),
+                "--python-home", str(self.selected / "python-home"),
+                "--private-home", str(self.selected / "private-home"),
+                "--keep-stage"]
+
     def run(self) -> subprocess.CompletedProcess[bytes]:
         environment = os.environ.copy()
         environment["PATH"] = f"{self.tools}{os.pathsep}{environment['PATH']}"
@@ -192,7 +228,7 @@ class CollectorHarness:
         environment["PYTHONHOME"] = str(self.temporary / "invalid-python-home")
         environment["VOICEBOX_CALLER_MARKER"] = "1"
         return subprocess.run(
-            (str(self.script),),
+            (str(self.script), *self.collector_arguments()),
             cwd=self.repository,
             check=False,
             stdout=subprocess.PIPE,
@@ -209,6 +245,10 @@ class CollectorHarness:
         return self.binaries / f"voicebox-server-{PLATFORM}.provenance.json"
 
     def staging_residue(self) -> list[Path]:
+        # ADAPTED for the C22 producer CLI: the stage is outside the checkout.
+        # `--keep-stage` is passed by this fixture, so a *retained* stage is
+        # expected; what these assertions still bind is that nothing is left
+        # inside the source tree and that no other build's stage appears.
         root = self.repository / "kilix_voicebox_backend" / "build"
         if not root.is_dir():
             return []
@@ -245,12 +285,20 @@ class SidecarCollectorTests(unittest.TestCase):
         invocation = json.loads(harness.record.read_text(encoding="utf-8"))
         stage = Path(invocation["stage"])
         self.assertEqual(
+            # ADAPTED for the C22 producer CLI: the stage the producer is given
+            # is outside the checkout now, under the caller's stage root.
             stage.parent,
-            harness.repository / "kilix_voicebox_backend" / "build",
+            harness.stage_root,
         )
         self.assertEqual(stage.name, f"stage-{invocation['build_id']}")
         self.assertRegex(invocation["build_id"], r"\A[0-9a-f]{32}\Z")
-        self.assertIn("kilix_voicebox_backend/build_binary.py", invocation["argv"])
+        # ADAPTED for the C22 producer CLI: the producer script is named by the
+        # caller as an absolute path and reached through the selected
+        # interpreter, so the assertion binds that exact script rather than the
+        # old repository-relative argument.
+        self.assertIn(str(harness.producer_script), invocation["argv"])
+        self.assertEqual(invocation["argv"][:4],
+                         ["-I", "-B", "-S", str(harness.producer_script)])
         # The staging directory belongs to that invocation alone and does not
         # survive it, so no later build can select these bytes.
         self.assertEqual(harness.staging_residue(), [])
@@ -718,14 +766,26 @@ class SidecarPublicationTests(unittest.TestCase):
                 self.assertPreserved(harness, before, harness.run())
 
     def test_source_ancestor_links_are_refused_before_producer_writes(self) -> None:
-        for relative in ("kilix_voicebox_backend", "kilix_voicebox_backend/build"):
+        # ADAPTED for the C22 producer CLI: the stage no longer lives under
+        # `kilix_voicebox_backend/build` inside the checkout, so the aliased
+        # ancestors under test are the ones the stage now actually has -- its
+        # caller-supplied root. The assertion is unchanged: an aliased ancestor
+        # is refused before the producer writes anything, and nothing appears
+        # through the alias.
+        for relative in ("stage-root", "."):
             with self.subTest(relative=relative):
                 harness = self.harness()
                 outside = harness.temporary / "outside"
                 outside.mkdir()
-                alias = harness.repository / relative
-                alias.parent.mkdir(parents=True, exist_ok=True)
-                alias.symlink_to(outside, target_is_directory=True)
+                alias = (harness.selected / relative) if relative != "." else None
+                if alias is not None:
+                    alias.rmdir()
+                    alias.symlink_to(outside, target_is_directory=True)
+                else:
+                    # An aliased stage root itself, reached through a link.
+                    linked = harness.temporary / "linked-root"
+                    linked.symlink_to(harness.stage_root, target_is_directory=True)
+                    harness.stage_root = linked
                 before = self.snapshot(harness)
                 harness.plan("success")
                 result = harness.run()

@@ -18,6 +18,110 @@ HANDOFF_SCHEMA="kilix.voicebox.sidecar-output/candidate-v1"
 HANDOFF_NAME="sidecar-outputs"
 EXPECTED_PROVENANCE="dist/voicebox-server.provenance.json"
 
+# Every input the producer selects is supplied explicitly by the caller. None
+# of them has a default: a workspace path baked in here would silently decide
+# what a release contains, and an ambient checkout or an installed interpreter
+# is not an authority. Missing values are named individually and refuse.
+BUILD_ID=""
+STAGE=""
+PYTHON_EXECUTABLE=""
+PRODUCER_SCRIPT=""
+VOICE_SOURCE=""
+TRANSCRIBE_SOURCE=""
+TRANSCRIBE_WHEEL=""
+WHEELHOUSE=""
+PYTHON_HOME=""
+PRIVATE_HOME=""
+KEEP_STAGE=0
+
+usage() {
+    cat >&2 <<'USAGE'
+Usage: scripts/build-server.sh --build-id HEX --stage-dir DIR \
+    --python-executable PATH --producer PATH --voice-source DIR \
+    --transcribe-source DIR --transcribe-wheel FILE --wheelhouse DIR \
+    --python-home DIR --private-home DIR [--keep-stage]
+
+Every input is required and explicit. tools/build_sidecar.py generates the
+invocation identity and supplies these; see docs/developer/sidecar-build.md.
+USAGE
+}
+
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --build-id) BUILD_ID="${2-}"; shift 2 ;;
+        --stage-dir) STAGE="${2-}"; shift 2 ;;
+        --python-executable) PYTHON_EXECUTABLE="${2-}"; shift 2 ;;
+        --producer) PRODUCER_SCRIPT="${2-}"; shift 2 ;;
+        --voice-source) VOICE_SOURCE="${2-}"; shift 2 ;;
+        --transcribe-source) TRANSCRIBE_SOURCE="${2-}"; shift 2 ;;
+        --transcribe-wheel) TRANSCRIBE_WHEEL="${2-}"; shift 2 ;;
+        --wheelhouse) WHEELHOUSE="${2-}"; shift 2 ;;
+        --python-home) PYTHON_HOME="${2-}"; shift 2 ;;
+        --private-home) PRIVATE_HOME="${2-}"; shift 2 ;;
+        --keep-stage) KEEP_STAGE=1; shift ;;
+        *) echo "Error: unrecognized collector argument: $1" >&2; usage; exit 2 ;;
+    esac
+done
+
+missing=""
+for pair in "build id:$BUILD_ID" "stage directory:$STAGE" \
+    "selected Python executable:$PYTHON_EXECUTABLE" "producer script:$PRODUCER_SCRIPT" \
+    "Voice source:$VOICE_SOURCE" "transcribe source:$TRANSCRIBE_SOURCE" \
+    "transcribe wheel:$TRANSCRIBE_WHEEL" "wheelhouse:$WHEELHOUSE" \
+    "Python home:$PYTHON_HOME" "private build home:$PRIVATE_HOME"; do
+    if [ -z "${pair#*:}" ]; then
+        missing="${missing}${missing:+, }${pair%%:*}"
+    fi
+done
+if [ -n "$missing" ]; then
+    echo "Error: the sidecar build has no explicit $missing." >&2
+    echo "Error: this build refuses rather than choosing inputs for a release." >&2
+    usage
+    exit 2
+fi
+if [[ ! "$BUILD_ID" =~ ^[0-9a-f]{8,64}$ ]]; then
+    echo "Error: the build identity is not 8-64 lowercase hex characters" >&2
+    exit 2
+fi
+for absolute in "$STAGE" "$PYTHON_EXECUTABLE" "$PRODUCER_SCRIPT" "$VOICE_SOURCE" \
+    "$TRANSCRIBE_SOURCE" "$TRANSCRIBE_WHEEL" "$WHEELHOUSE" "$PYTHON_HOME" "$PRIVATE_HOME"; do
+    case "$absolute" in
+        /*) ;;
+        *) echo "Error: every selected input must be an absolute path: $absolute" >&2; exit 2 ;;
+    esac
+done
+# The stage is the producer's, outside this checkout, and must not exist yet.
+case "$STAGE" in
+    "$REPO_ROOT"|"$REPO_ROOT"/*)
+        echo "Error: the build stage must be outside the source checkout: $STAGE" >&2
+        exit 2 ;;
+esac
+if [ -e "$STAGE" ] || [ -L "$STAGE" ]; then
+    echo "Error: staging directory already exists: $STAGE" >&2
+    exit 2
+fi
+STAGE_PARENT="${STAGE%/*}"
+if [ ! -d "$STAGE_PARENT" ] || [ -L "$STAGE_PARENT" ]; then
+    echo "Error: the staging parent must already exist and not be a link: $STAGE_PARENT" >&2
+    exit 2
+fi
+for required in "$PYTHON_EXECUTABLE" "$PRODUCER_SCRIPT" "$TRANSCRIBE_WHEEL"; do
+    if [ -L "$required" ] || [ ! -f "$required" ]; then
+        echo "Error: selected input is not a regular file: $required" >&2
+        exit 2
+    fi
+done
+for required in "$VOICE_SOURCE" "$TRANSCRIBE_SOURCE" "$WHEELHOUSE" "$PYTHON_HOME" "$PRIVATE_HOME"; do
+    if [ -L "$required" ] || [ ! -d "$required" ]; then
+        echo "Error: selected input is not a directory: $required" >&2
+        exit 2
+    fi
+done
+if [ ! -x "$PYTHON_EXECUTABLE" ]; then
+    echo "Error: the selected Python executable is not executable: $PYTHON_EXECUTABLE" >&2
+    exit 2
+fi
+
 if command -v sha256sum >/dev/null 2>&1; then
     sha256_of() { sha256sum -- "$1" | cut -d ' ' -f 1; }
 elif command -v shasum >/dev/null 2>&1; then
@@ -31,10 +135,14 @@ fi
 # conceals an alias. This is trusted private-tree hygiene, not a lock against
 # another owner changing directories concurrently. Callers pass paths in REPO_ROOT.
 check_directory_chain() {
-    local path="$1" current="$REPO_ROOT" rest component
+    # The trusted root defaults to the checkout. The producer's stage lives
+    # outside it now, so its own already-existing parent is the root for stage
+    # paths; the component walk below is unchanged either way.
+    local path="$1" root="${2:-$REPO_ROOT}" current rest component
+    current="$root"
     case "$path" in
-        "$REPO_ROOT") return 0 ;;
-        "$REPO_ROOT"/*) rest="${path#"$REPO_ROOT"/}" ;;
+        "$root") return 0 ;;
+        "$root"/*) rest="${path#"$root"/}" ;;
         *) echo "Error: output directory is outside the repository: $path" >&2; return 1 ;;
     esac
     while [ -n "$rest" ]; do
@@ -57,8 +165,8 @@ check_directory_chain() {
 }
 
 validate_output() {
-    local source="$1" expected="$2" description="$3" actual
-    check_directory_chain "${source%/*}" || return 1
+    local source="$1" expected="$2" description="$3" root="${4:-$REPO_ROOT}" actual
+    check_directory_chain "${source%/*}" "$root" || return 1
     if [ -L "$source" ] || [ ! -f "$source" ]; then
         echo "Error: $description is not a regular file: $source" >&2
         return 1
@@ -114,7 +222,15 @@ cleanup() {
     # this guarantee. No background jobs or concurrent packagers are supported.
     trap '' HUP INT TERM
     set +e
-    if ! check_directory_chain "$STAGE_ROOT" || ! rm -rf -- "$STAGE"; then
+    # A failed build keeps its own stage: the producer's diagnostics are the
+    # only record of what went wrong, and there is no successful handoff to
+    # collect from it. A successful build keeps it too when the caller still
+    # needs the selected-input notices, and says where it is.
+    if [ "$status" -ne 0 ] || [ "$KEEP_STAGE" = 1 ]; then
+        if [ -d "$STAGE" ]; then
+            printf 'Retained build stage: %q\n' "$STAGE" >&2
+        fi
+    elif ! rm -rf -- "$STAGE"; then
         echo "Error: could not remove owned build stage: $STAGE" >&2
         status=1
     fi
@@ -157,50 +273,44 @@ if [[ ! "$PLATFORM" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{2,127}$ ]]; then
 fi
 
 echo "Building voicebox-server for platform: $PLATFORM"
+echo "Build identity: $BUILD_ID"
 
-# A fresh identity for this invocation. It names the staging directory the
-# producer must create, and the producer repeats it in the handoff, so outputs
-# left by any other build are refused below rather than shipped.
-BUILD_ID="$(od -An -v -t x1 -N 16 /dev/urandom | tr -d ' \n')"
-if [[ ! "$BUILD_ID" =~ ^[0-9a-f]{32}$ ]]; then
-    echo "Error: unable to generate a build identity" >&2
-    exit 1
-fi
-
-STAGE_ROOT="$REPO_ROOT/kilix_voicebox_backend/build"
+# The identity was generated by the caller at the start of this build and is
+# repeated by the producer in its handoff, so outputs left by any other build
+# are refused below rather than shipped.
 BINARIES_DIR="$REPO_ROOT/tauri/src-tauri/binaries"
-check_directory_chain "$STAGE_ROOT"
 check_directory_chain "$BINARIES_DIR"
-mkdir -p "$STAGE_ROOT"
-STAGE="$STAGE_ROOT/stage-$BUILD_ID"
-if [ -e "$STAGE" ] || [ -L "$STAGE" ]; then
-    echo "Error: staging directory already exists: $STAGE" >&2
-    exit 1
-fi
 trap cleanup EXIT
 trap 'exit 129' HUP
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-# Never let caller-controlled Python startup state reach PyInstaller's child
-# interpreters.  The explicit environment also keeps the locked uv execution
-# independent of user uv configuration while retaining only the paths needed
-# to locate the selected build tools and scratch directory.  The staging
-# directory and build identity are passed as arguments, so this build's output
-# selection does not depend on any environment variable surviving that filter.
+# The selected interpreter is executed directly, by absolute path, with -I -B -S.
+# No uv or pip is invoked and nothing is resolved or installed: the producer
+# verifies the selected wheels itself against the unchanged lock. The
+# environment is constructed, not filtered from the caller's: PATH is fixed,
+# HOME and TMPDIR are this build's private directory, and no ambient
+# PYTHONPATH/PYTHONHOME or loader injection survives, so no caller site
+# packages or source roots reach the producer's import path. Every input is an
+# explicit argument, so nothing depends on a variable surviving this boundary.
 env -i \
-    HOME="${HOME:?HOME is required for the locked build cache}" \
-    PATH="$PATH" \
-    TMPDIR="${TMPDIR:-/tmp}" \
+    HOME="$PRIVATE_HOME" \
+    TMPDIR="$PRIVATE_HOME" \
+    PATH=/usr/bin:/bin \
     LC_ALL=C.UTF-8 \
     PYTHONNOUSERSITE=1 \
     PYTHONSAFEPATH=1 \
-    uv --no-config run --frozen --isolated --no-default-groups --group build \
-        python -I kilix_voicebox_backend/build_binary.py \
-            --stage-dir "$STAGE" --build-id "$BUILD_ID"
+    PYTHONDONTWRITEBYTECODE=1 \
+    "$PYTHON_EXECUTABLE" -I -B -S "$PRODUCER_SCRIPT" \
+        --stage-dir "$STAGE" --build-id "$BUILD_ID" \
+        --voice-source "$VOICE_SOURCE" \
+        --transcribe-source "$TRANSCRIBE_SOURCE" \
+        --transcribe-wheel "$TRANSCRIBE_WHEEL" \
+        --wheelhouse "$WHEELHOUSE" \
+        --python-home "$PYTHON_HOME"
 
 HANDOFF="$STAGE/$HANDOFF_NAME"
-check_directory_chain "$STAGE"
+check_directory_chain "$STAGE" "$STAGE_PARENT"
 if [ -L "$HANDOFF" ] || [ ! -f "$HANDOFF" ]; then
     echo "Error: the build produced no sidecar handoff at $HANDOFF" >&2
     exit 1
@@ -258,9 +368,9 @@ DESTINATION="$BINARIES_DIR/voicebox-server-${PLATFORM}${SUFFIX}"
 PROVENANCE_DESTINATION="$BINARIES_DIR/voicebox-server-${PLATFORM}.provenance.json"
 validate_destination "$DESTINATION"
 validate_destination "$PROVENANCE_DESTINATION"
-validate_output "$STAGE/$handoff_binary" "$handoff_binary_sha256" "produced sidecar"
+validate_output "$STAGE/$handoff_binary" "$handoff_binary_sha256" "produced sidecar" "$STAGE_PARENT"
 validate_size "$STAGE/$handoff_binary" "$handoff_binary_bytes"
-validate_output "$STAGE/$handoff_provenance" "$handoff_provenance_sha256" "produced provenance"
+validate_output "$STAGE/$handoff_provenance" "$handoff_provenance_sha256" "produced provenance" "$STAGE_PARENT"
 provenance_bytes="$(wc -c < "$STAGE/$handoff_provenance" | tr -d ' ')"
 
 # Sibling staging guarantees same-filesystem renames. No destination is removed
