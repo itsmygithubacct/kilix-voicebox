@@ -79,11 +79,30 @@ Each run owns one staging directory, `kilix_voicebox_backend/build/stage-<id>`,
 which the producer creates and the script removes when it exits. The producer
 finishes by writing a handoff naming and hashing exactly the outputs of that
 run, and the script installs into `tauri/src-tauri/binaries/` only what the
-handoff names, after checking the build identity, the digests and that neither
-source nor destination is a symbolic link. A build that fails or produces
-nothing therefore installs nothing: no earlier binary or provenance can be
-picked up in its place. `kilix_voicebox_backend/build_binary.py` can also be run
-directly, but it requires `--stage-dir` naming a directory that does not yet
+handoff names. It validates both sources, stages both copies in a fresh sibling
+directory on the destination filesystem, and checks their digests, sizes and
+the binary's executable mode before replacing either destination. Symbolic
+links in source/destination entries or their parents within the repository are
+refused before reading or writing through them. Earlier output is never used
+as a substitute for this run's producer output or removed at startup.
+
+The previous pair's inodes are retained until both promotions and final checks
+succeed. Ordinary copy, chmod, validation or promotion failures and handled
+HUP/INT/TERM restore the previous files (or their previous absence). Success is
+printed only after both members succeed and owned cleanup finishes. If rollback
+fails, the script exits unsuccessfully, prints the exact recovery directory and
+destinations, and retains `recovery.txt` and available previous files there;
+do not package those outputs until they have been recovered and verified.
+
+This is failure-consistent publication in a trusted private build tree, not an
+atomic or durable two-file commit. Builders and packagers must be serialized;
+there is no concurrent-writer protection or concurrent-reader snapshot. A
+SIGKILL, power loss or filesystem crash between the two renames can leave a
+mixed pair. The later artifact-identity gate (G3, still required) must reject
+an inconsistent pair before packaging; this collector does not provide that
+gate or crash durability. HUP/INT/TERM are ignored during the final
+rollback/cleanup itself. `kilix_voicebox_backend/build_binary.py` can also be
+run directly, but requires `--stage-dir` naming a directory that does not yet
 exist.
 
 ## Local API

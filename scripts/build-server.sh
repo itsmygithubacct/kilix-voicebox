@@ -5,7 +5,8 @@
 # writing a handoff that names and hashes exactly the outputs that invocation
 # produced. This script collects only what that handoff names, so a build that
 # fails or produces nothing cannot fall back to an earlier build's binary or
-# provenance, and the files installed for Tauri are always this build's.
+# provenance. Publication retains the previous pair until both replacements
+# succeed; it is failure-consistent, not a crash-atomic two-file transaction.
 
 set -euo pipefail
 
@@ -26,27 +27,125 @@ else
     exit 1
 fi
 
-# `is a regular file` is asserted separately from `is not a symbolic link`,
-# because -f follows links: a link planted in the staging or destination
-# directory would otherwise let a build collect, or write through to, a file
-# outside the outputs this invocation produced.
-collect_output() {
-    local source="$1" expected="$2" destination="$3" description="$4" actual
+# Check lexical components BEFORE mkdir/read/copy, not a resolved path that
+# conceals an alias. This is trusted private-tree hygiene, not a lock against
+# another owner changing directories concurrently. Callers pass paths in REPO_ROOT.
+check_directory_chain() {
+    local path="$1" current="$REPO_ROOT" rest component
+    case "$path" in
+        "$REPO_ROOT") return 0 ;;
+        "$REPO_ROOT"/*) rest="${path#"$REPO_ROOT"/}" ;;
+        *) echo "Error: output directory is outside the repository: $path" >&2; return 1 ;;
+    esac
+    while [ -n "$rest" ]; do
+        component="${rest%%/*}"
+        if [ "$component" = . ] || [ "$component" = .. ]; then
+            echo "Error: noncanonical output directory: $path" >&2
+            return 1
+        fi
+        current="$current/$component"
+        if [ -L "$current" ]; then
+            echo "Error: output directory is a symbolic link: $current" >&2
+            return 1
+        fi
+        if [ -e "$current" ] && [ ! -d "$current" ]; then
+            echo "Error: output parent is not a directory: $current" >&2
+            return 1
+        fi
+        case "$rest" in */*) rest="${rest#*/}" ;; *) rest="" ;; esac
+    done
+}
+
+validate_output() {
+    local source="$1" expected="$2" description="$3" actual
+    check_directory_chain "${source%/*}" || return 1
     if [ -L "$source" ] || [ ! -f "$source" ]; then
         echo "Error: $description is not a regular file: $source" >&2
-        exit 1
+        return 1
     fi
-    actual="$(sha256_of "$source")"
+    actual="$(sha256_of "$source")" || return 1
     if [ "$actual" != "$expected" ]; then
         echo "Error: $description does not match the identity this build recorded" >&2
-        exit 1
+        return 1
     fi
+}
+
+validate_destination() {
+    local destination="$1"
     if [ -L "$destination" ]; then
         echo "Error: sidecar destination is a symbolic link: $destination" >&2
-        exit 1
+        return 1
     fi
-    rm -f -- "$destination"
-    cp -- "$source" "$destination"
+    if [ -e "$destination" ] && [ ! -f "$destination" ]; then
+        echo "Error: sidecar destination is not a regular file: $destination" >&2
+        return 1
+    fi
+}
+
+validate_size() {
+    local file="$1" expected="$2" actual
+    actual="$(wc -c < "$file" | tr -d ' ')" || return 1
+    if [ "$actual" != "$expected" ]; then
+        echo "Error: collected output size differs from the recorded size: $file" >&2
+        return 1
+    fi
+}
+
+TRANSACTION=""
+publication_started=0
+prior_binary=0
+prior_provenance=0
+
+restore_member() {
+    local previous="$1" destination="$2" existed="$3"
+    validate_destination "$destination" || return 1
+    if [ "$existed" = 1 ]; then
+        # A failed first promotion may have left this exact old inode in place.
+        [ "$previous" -ef "$destination" ] || mv -f -- "$previous" "$destination"
+    else
+        rm -f -- "$destination"
+    fi
+}
+
+cleanup() {
+    local status=$? rollback_failed=0 keep_transaction=0
+    trap - EXIT
+    # Do not interrupt rollback/cleanup itself; SIGKILL/power loss is outside
+    # this guarantee. No background jobs or concurrent packagers are supported.
+    trap '' HUP INT TERM
+    set +e
+    if ! check_directory_chain "$STAGE_ROOT" || ! rm -rf -- "$STAGE"; then
+        echo "Error: could not remove owned build stage: $STAGE" >&2
+        status=1
+    fi
+    if [ "$status" -ne 0 ] && [ "$publication_started" = 1 ]; then
+        if check_directory_chain "$BINARIES_DIR"; then
+            restore_member "$TRANSACTION/previous-binary" "$DESTINATION" "$prior_binary" || rollback_failed=1
+            restore_member "$TRANSACTION/previous-provenance" "$PROVENANCE_DESTINATION" "$prior_provenance" || rollback_failed=1
+        else
+            rollback_failed=1
+        fi
+        if [ "$rollback_failed" = 1 ]; then
+            keep_transaction=1
+            status=1
+            echo "Error: publication rollback incomplete; DO NOT package these outputs." >&2
+            printf 'Recovery directory: %q\nRecovery instructions: %q\n' \
+                "$TRANSACTION" "$TRANSACTION/recovery.txt" >&2
+            printf 'Binary destination: %q\nProvenance destination: %q\n' \
+                "$DESTINATION" "$PROVENANCE_DESTINATION" >&2
+        fi
+    fi
+    if [ -n "$TRANSACTION" ] && [ "$keep_transaction" = 0 ]; then
+        if ! check_directory_chain "$BINARIES_DIR" || ! rm -rf -- "$TRANSACTION"; then
+            echo "Error: could not remove owned publication directory: $TRANSACTION" >&2
+            status=1
+        fi
+    fi
+    if [ "$status" = 0 ]; then
+        echo "Built voicebox-server-${PLATFORM}${SUFFIX} ($handoff_binary_bytes bytes)" || status=1
+        [ "$status" != 0 ] || echo "Build complete!" || status=1
+    fi
+    exit "$status"
 }
 
 # Determine the exact Rust host tuple used by Tauri. Refuse an unavailable or
@@ -69,17 +168,19 @@ if [[ ! "$BUILD_ID" =~ ^[0-9a-f]{32}$ ]]; then
 fi
 
 STAGE_ROOT="$REPO_ROOT/kilix_voicebox_backend/build"
-if [ -L "$STAGE_ROOT" ]; then
-    echo "Error: staging root is a symbolic link: $STAGE_ROOT" >&2
-    exit 1
-fi
+BINARIES_DIR="$REPO_ROOT/tauri/src-tauri/binaries"
+check_directory_chain "$STAGE_ROOT"
+check_directory_chain "$BINARIES_DIR"
 mkdir -p "$STAGE_ROOT"
 STAGE="$STAGE_ROOT/stage-$BUILD_ID"
 if [ -e "$STAGE" ] || [ -L "$STAGE" ]; then
     echo "Error: staging directory already exists: $STAGE" >&2
     exit 1
 fi
-trap 'rm -rf -- "$STAGE"' EXIT
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 # Never let caller-controlled Python startup state reach PyInstaller's child
 # interpreters.  The explicit environment also keeps the locked uv execution
@@ -99,13 +200,14 @@ env -i \
             --stage-dir "$STAGE" --build-id "$BUILD_ID"
 
 HANDOFF="$STAGE/$HANDOFF_NAME"
+check_directory_chain "$STAGE"
 if [ -L "$HANDOFF" ] || [ ! -f "$HANDOFF" ]; then
     echo "Error: the build produced no sidecar handoff at $HANDOFF" >&2
     exit 1
 fi
 
-handoff_schema= handoff_build_id= handoff_binary= handoff_binary_sha256=
-handoff_binary_bytes= handoff_provenance= handoff_provenance_sha256=
+handoff_schema='' handoff_build_id='' handoff_binary='' handoff_binary_sha256=''
+handoff_binary_bytes='' handoff_provenance='' handoff_provenance_sha256=''
 while IFS='=' read -r key value; do
     case "$key" in
         schema) handoff_schema="$value" ;;
@@ -149,25 +251,65 @@ if [[ ! "$handoff_binary_sha256" =~ ^[0-9a-f]{64}$ ]] \
     exit 1
 fi
 
-BINARIES_DIR="$REPO_ROOT/tauri/src-tauri/binaries"
-if [ -L "$BINARIES_DIR" ]; then
-    echo "Error: sidecar destination is a symbolic link: $BINARIES_DIR" >&2
-    exit 1
-fi
+check_directory_chain "$BINARIES_DIR"
 mkdir -p "$BINARIES_DIR"
 
 DESTINATION="$BINARIES_DIR/voicebox-server-${PLATFORM}${SUFFIX}"
-collect_output "$STAGE/$handoff_binary" "$handoff_binary_sha256" \
-    "$DESTINATION" "produced sidecar"
-chmod +x "$DESTINATION"
-if [ "$(wc -c < "$DESTINATION" | tr -d ' ')" != "$handoff_binary_bytes" ]; then
-    echo "Error: collected sidecar size differs from the recorded size" >&2
-    exit 1
+PROVENANCE_DESTINATION="$BINARIES_DIR/voicebox-server-${PLATFORM}.provenance.json"
+validate_destination "$DESTINATION"
+validate_destination "$PROVENANCE_DESTINATION"
+validate_output "$STAGE/$handoff_binary" "$handoff_binary_sha256" "produced sidecar"
+validate_size "$STAGE/$handoff_binary" "$handoff_binary_bytes"
+validate_output "$STAGE/$handoff_provenance" "$handoff_provenance_sha256" "produced provenance"
+provenance_bytes="$(wc -c < "$STAGE/$handoff_provenance" | tr -d ' ')"
+
+# Sibling staging guarantees same-filesystem renames. No destination is removed
+# at startup or touched until BOTH copies and their executable mode validate.
+TRANSACTION="$(mktemp -d "$BINARIES_DIR/.voicebox-publish-$BUILD_ID.XXXXXXXX")"
+cp -- "$STAGE/$handoff_binary" "$TRANSACTION/new-binary"
+cp -- "$STAGE/$handoff_provenance" "$TRANSACTION/new-provenance"
+chmod 755 "$TRANSACTION/new-binary"
+validate_output "$TRANSACTION/new-binary" "$handoff_binary_sha256" "copied sidecar"
+validate_size "$TRANSACTION/new-binary" "$handoff_binary_bytes"
+validate_output "$TRANSACTION/new-provenance" "$handoff_provenance_sha256" "copied provenance"
+validate_size "$TRANSACTION/new-provenance" "$provenance_bytes"
+[ -x "$TRANSACTION/new-binary" ] || { echo "Error: copied sidecar is not executable" >&2; exit 1; }
+
+# Keep exact old inodes, including modes, until completion. A partial prior
+# destination is also restored to its original presence/absence on failure.
+if [ -f "$DESTINATION" ]; then
+    ln -- "$DESTINATION" "$TRANSACTION/previous-binary"
+    prior_binary=1
 fi
-echo "Built voicebox-server-${PLATFORM}${SUFFIX} ($handoff_binary_bytes bytes)"
+if [ -f "$PROVENANCE_DESTINATION" ]; then
+    ln -- "$PROVENANCE_DESTINATION" "$TRANSACTION/previous-provenance"
+    prior_provenance=1
+fi
+{
+    echo 'Publication recovery: stop other builders/packagers and inspect both members.'
+    echo 'An existing previous-* file holds the old inode; an already restored member is at its destination.'
+    printf 'binary_destination=%q\nprovenance_destination=%q\n' "$DESTINATION" "$PROVENANCE_DESTINATION"
+    printf 'previous_binary_existed=%s\nprevious_provenance_existed=%s\n' "$prior_binary" "$prior_provenance"
+    for member in binary provenance; do
+        if [ -f "$TRANSACTION/previous-$member" ]; then
+            printf 'previous_%s_sha256=%s\n' "$member" "$(sha256_of "$TRANSACTION/previous-$member")"
+            printf 'Restore this file to its destination if needed: %q\n' "$TRANSACTION/previous-$member"
+        else
+            printf 'The previous %s was absent; remove only its new destination to restore that state.\n' "$member"
+        fi
+    done
+} > "$TRANSACTION/recovery.txt"
 
-collect_output "$STAGE/$handoff_provenance" "$handoff_provenance_sha256" \
-    "$BINARIES_DIR/voicebox-server-${PLATFORM}.provenance.json" \
-    "produced provenance"
-
-echo "Build complete!"
+# Set intent before the first rename: a handled interrupt after a rename but
+# before its shell status is observed still rolls back both members. These two
+# renames are NOT atomic to concurrent readers or a crash; G3 must reject a
+# mismatched pair before packaging, and builders/packagers must be serialized.
+publication_started=1
+mv -f -- "$TRANSACTION/new-binary" "$DESTINATION"
+mv -f -- "$TRANSACTION/new-provenance" "$PROVENANCE_DESTINATION"
+validate_output "$DESTINATION" "$handoff_binary_sha256" "published sidecar"
+validate_size "$DESTINATION" "$handoff_binary_bytes"
+validate_output "$PROVENANCE_DESTINATION" "$handoff_provenance_sha256" "published provenance"
+validate_size "$PROVENANCE_DESTINATION" "$provenance_bytes"
+[ -x "$DESTINATION" ] || { echo "Error: published sidecar is not executable" >&2; exit 1; }
+# EXIT performs owned cleanup and only then prints success for the complete pair.

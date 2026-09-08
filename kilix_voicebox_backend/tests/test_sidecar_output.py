@@ -21,6 +21,8 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import signal
+import stat
 import subprocess
 import sys
 import tempfile
@@ -443,6 +445,322 @@ class SidecarCollectorTests(unittest.TestCase):
         )
         self.assertFalse(harness.collected_binary.exists())
         self.assertTrue(harness.collected_provenance.is_file())
+
+
+PUBLICATION_PRODUCER = PRODUCER.replace(
+    'if mode == "mutated_output":',
+    '''if mode == "missing_provenance":
+    provenance.unlink()
+if mode == "symlinked_provenance":
+    provenance.unlink()
+    provenance.symlink_to(PLAN["outside"])
+if mode == "aliased_dist":
+    dist.rename(PLAN["outside"])
+    dist.symlink_to(PLAN["outside"], target_is_directory=True)
+if mode == "aliased_stage":
+    stage_path.rename(PLAN["outside"])
+    stage_path.symlink_to(PLAN["outside"], target_is_directory=True)
+if mode == "mutated_output":''',
+)
+
+# These shims delegate to actual filesystem tools except at the explicitly
+# named operation. They run outside the sanitized producer, with -I so the
+# harness's existing PYTHONHOME/PYTHONPATH poison is still exercised safely.
+PUBLICATION_TOOL = r'''#!/usr/bin/python3 -I
+import hashlib
+import json
+import os
+import signal
+import subprocess
+import sys
+from pathlib import Path
+
+tool = Path(__file__).name
+plan = json.loads(Path(__file__).with_name("fault-plan.json").read_text())
+args = sys.argv[1:]
+source = Path(args[-2]) if len(args) >= 2 else Path(".")
+target = Path(args[-1])
+event = "other"
+if tool == "cp":
+    event = "copy_provenance" if source.name.endswith(".provenance.json") else "copy_binary"
+elif tool == "chmod":
+    event = "chmod"
+elif tool == "ln":
+    event = "backup_provenance" if target.name == "previous-provenance" else "backup_binary"
+elif tool == "mv":
+    event = {"new-binary": "promote_binary", "new-provenance": "promote_provenance",
+             "previous-binary": "restore_binary", "previous-provenance": "restore_provenance"}.get(source.name, "other")
+elif tool == "rm" and target.name == "voicebox-server-x86_64-unknown-linux-gnu":
+    event = "remove_new_binary"
+action = plan.get(event, "pass")
+entry = {"tool": tool, "argv": args, "event": event, "action": action}
+if event == "promote_binary":
+    entry["copies"] = {}
+    for name in ("new-binary", "new-provenance"):
+        path = source.parent / name
+        entry["copies"][name] = {"sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            "bytes": path.stat().st_size, "mode": path.stat().st_mode & 0o777,
+            "dev": path.stat().st_dev, "ino": path.stat().st_ino}
+with Path(__file__).with_name("fault-observations.jsonl").open("a") as log:
+    log.write(json.dumps(entry) + "\n")
+if action == "fail":
+    sys.stderr.write("controlled-tool failure: " + event + "\n")
+    raise SystemExit(29)
+if action == "no_op":
+    raise SystemExit(0)
+result = subprocess.run(["/usr/bin/" + tool, *args], check=False)
+if result.returncode:
+    raise SystemExit(result.returncode)
+if action == "corrupt_copy":
+    target.write_bytes(b"corrupted-copy")
+elif action == "fail_after":
+    raise SystemExit(29)
+elif action.startswith("signal_"):
+    os.kill(os.getppid(), getattr(signal, action.removeprefix("signal_")))
+raise SystemExit(0)
+'''
+
+
+class SidecarPublicationTests(unittest.TestCase):
+    """Actual-script failure/rollback controls, including the second member."""
+
+    def harness(self, prior: bool = True) -> CollectorHarness:
+        harness = SidecarCollectorTests.harness(self)
+        harness.producer.write_text(PUBLICATION_PRODUCER, encoding="utf-8")
+        harness.binaries.mkdir(parents=True)
+        (harness.binaries / "unrelated").write_bytes(b"unrelated destination bytes")
+        if prior:
+            harness.collected_binary.write_bytes(b"previous-sidecar")
+            harness.collected_binary.chmod(0o751)
+            harness.collected_provenance.write_bytes(b'{"previous":true}\n')
+            harness.collected_provenance.chmod(0o640)
+        return harness
+
+    def snapshot(self, harness: CollectorHarness) -> dict:
+        result = {}
+        for path in harness.binaries.iterdir():
+            info = path.lstat()
+            result[path.name] = (
+                path.read_bytes() if path.is_file() and not path.is_symlink()
+                else os.readlink(path) if path.is_symlink() else "directory",
+                stat.S_IMODE(info.st_mode), info.st_ino, info.st_uid, info.st_gid,
+            )
+        return result
+
+    def fault(self, harness: CollectorHarness, **actions: str) -> None:
+        (harness.tools / "fault-plan.json").write_text(json.dumps(actions), encoding="utf-8")
+        for name in ("cp", "chmod", "mv", "ln", "rm"):
+            path = harness.tools / name
+            path.write_text(PUBLICATION_TOOL, encoding="utf-8")
+            path.chmod(0o755)
+
+    def observations(self, harness: CollectorHarness) -> list[dict]:
+        path = harness.tools / "fault-observations.jsonl"
+        return [json.loads(line) for line in path.read_text().splitlines()] if path.exists() else []
+
+    def assertPreserved(self, harness: CollectorHarness, before: dict, result) -> None:
+        self.assertNotEqual(result.returncode, 0)
+        self.assertNotIn(b"Built voicebox-server-", result.stdout)
+        self.assertNotIn(b"Build complete!", result.stdout)
+        self.assertEqual(self.snapshot(harness), before)
+        self.assertEqual(harness.staging_residue(), [])
+
+    def test_valid_pair_is_fully_staged_before_first_promotion(self) -> None:
+        harness = self.harness()
+        unrelated = self.snapshot(harness)["unrelated"]
+        harness.plan("success")
+        self.fault(harness)
+        result = harness.run()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+        promotions = [row for row in self.observations(harness) if row["event"] == "promote_binary"]
+        self.assertEqual(len(promotions), 1)
+        first = promotions[0]
+        for temporary, destination in (("new-binary", harness.collected_binary),
+                                       ("new-provenance", harness.collected_provenance)):
+            row = first["copies"][temporary]
+            self.assertEqual(row["sha256"], hashlib.sha256(destination.read_bytes()).hexdigest())
+            self.assertEqual(row["bytes"], destination.stat().st_size)
+            self.assertEqual(row["dev"], destination.stat().st_dev)
+        self.assertEqual(first["copies"]["new-binary"]["mode"], 0o755)
+        self.assertEqual(self.snapshot(harness)["unrelated"], unrelated)
+        self.assertFalse(list(harness.binaries.glob(".voicebox-publish-*")))
+        self.assertEqual(result.stdout.count(b"Built voicebox-server-"), 1)
+        self.assertEqual(result.stdout.count(b"Build complete!"), 1)
+
+    def test_invalid_second_source_preserves_complete_pair_and_absence(self) -> None:
+        for prior in (True, False):
+            for mode, overrides in (("missing_provenance", {}),
+                                    ("success", {"provenance_sha256": "0" * 64}),
+                                    ("symlinked_provenance", {})):
+                with self.subTest(prior=prior, mode=mode, overrides=overrides):
+                    harness = self.harness(prior)
+                    outside = harness.temporary / "outside"
+                    outside.write_bytes(b"unrelated source bytes")
+                    before = self.snapshot(harness)
+                    harness.plan(mode, outside=str(outside), **overrides)
+                    self.assertPreserved(harness, before, harness.run())
+                    self.assertEqual(outside.read_bytes(), b"unrelated source bytes")
+
+    def test_symlinked_second_destination_preserves_binary_and_link(self) -> None:
+        harness = self.harness()
+        outside = harness.temporary / "outside"
+        outside.write_bytes(b"untouched")
+        harness.collected_provenance.unlink()
+        harness.collected_provenance.symlink_to(outside)
+        before = self.snapshot(harness)
+        harness.plan("success")
+        self.assertPreserved(harness, before, harness.run())
+        self.assertEqual(outside.read_bytes(), b"untouched")
+
+    def test_nonregular_second_destination_preserves_previous_entries(self) -> None:
+        for kind in ("directory", "fifo"):
+            with self.subTest(kind=kind):
+                harness = self.harness()
+                harness.collected_provenance.unlink()
+                if kind == "directory":
+                    harness.collected_provenance.mkdir()
+                else:
+                    os.mkfifo(harness.collected_provenance)
+                before = self.snapshot(harness)
+                harness.plan("success")
+                self.assertPreserved(harness, before, harness.run())
+
+    def operation_failure(self, event: str, action: str = "fail") -> None:
+        for prior in (True, False):
+            with self.subTest(prior=prior, event=event, action=action):
+                harness = self.harness(prior)
+                before = self.snapshot(harness)
+                harness.plan("success")
+                self.fault(harness, **{event: action})
+                result = harness.run()
+                self.assertTrue(any(row["event"] == event and row["action"] == action
+                                    for row in self.observations(harness)), "injection not reached")
+                self.assertPreserved(harness, before, result)
+
+    def test_failed_first_copy_preserves_pair(self) -> None:
+        self.operation_failure("copy_binary")
+
+    def test_failed_second_copy_preserves_pair(self) -> None:
+        self.operation_failure("copy_provenance")
+
+    def test_failed_chmod_preserves_pair(self) -> None:
+        self.operation_failure("chmod")
+
+    def test_missing_executable_mode_refuses_before_promotion(self) -> None:
+        self.operation_failure("chmod", "no_op")
+
+    def test_corrupted_first_copy_refuses_before_promotion(self) -> None:
+        self.operation_failure("copy_binary", "corrupt_copy")
+
+    def test_corrupted_second_copy_refuses_before_promotion(self) -> None:
+        self.operation_failure("copy_provenance", "corrupt_copy")
+
+    def test_failed_first_promotion_restores_pair(self) -> None:
+        self.operation_failure("promote_binary")
+
+    def test_failed_second_promotion_restores_pair(self) -> None:
+        self.operation_failure("promote_provenance")
+
+    def test_failed_second_promotion_after_rename_still_restores_pair(self) -> None:
+        self.operation_failure("promote_provenance", "fail_after")
+
+    def test_handled_interrupts_during_copy_chmod_and_both_promotions(self) -> None:
+        for event in ("copy_provenance", "chmod", "promote_binary", "promote_provenance"):
+            for sig in (signal.SIGHUP, signal.SIGINT, signal.SIGTERM):
+                self.operation_failure(event, "signal_" + sig.name)
+
+    def test_backup_failure_leaves_exact_previous_pair(self) -> None:
+        for event in ("backup_binary", "backup_provenance"):
+            with self.subTest(event=event):
+                harness = self.harness()
+                before = self.snapshot(harness)
+                harness.plan("success")
+                self.fault(harness, **{event: "fail"})
+                self.assertPreserved(harness, before, harness.run())
+
+    def test_incorrect_recorded_binary_size_refuses_without_publication(self) -> None:
+        harness = self.harness()
+        before = self.snapshot(harness)
+        harness.plan("success", binary_bytes="1")
+        self.assertPreserved(harness, before, harness.run())
+
+    def test_rollback_failure_retains_exact_recovery_information(self) -> None:
+        for prior, event in ((True, "restore_binary"), (False, "remove_new_binary")):
+            with self.subTest(prior=prior):
+                harness = self.harness(prior)
+                harness.plan("success")
+                self.fault(harness, promote_provenance="fail", **{event: "fail"})
+                result = harness.run()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b"rollback incomplete", result.stderr)
+                self.assertIn(b"DO NOT package", result.stderr)
+                self.assertNotIn(b"Built voicebox-server-", result.stdout)
+                retained = list(harness.binaries.glob(".voicebox-publish-*"))
+                self.assertEqual(len(retained), 1)
+                instructions = (retained[0] / "recovery.txt").read_text()
+                self.assertIn(str(harness.collected_binary), instructions)
+                self.assertIn(str(harness.collected_provenance), instructions)
+                self.assertIn(str(retained[0]).encode(), result.stderr)
+                if prior:
+                    self.assertEqual((retained[0] / "previous-binary").read_bytes(), b"previous-sidecar")
+                else:
+                    self.assertIn("previous_binary_existed=0", instructions)
+                self.assertEqual((harness.binaries / "unrelated").read_bytes(), b"unrelated destination bytes")
+
+    def test_partial_previous_destinations_are_restored_on_failure(self) -> None:
+        for missing in ("binary", "provenance"):
+            with self.subTest(missing=missing):
+                harness = self.harness()
+                getattr(harness, "collected_" + missing).unlink()
+                before = self.snapshot(harness)
+                harness.plan("success")
+                self.fault(harness, promote_provenance="fail_after")
+                self.assertPreserved(harness, before, harness.run())
+
+    def test_source_ancestor_links_are_refused_before_producer_writes(self) -> None:
+        for relative in ("kilix_voicebox_backend", "kilix_voicebox_backend/build"):
+            with self.subTest(relative=relative):
+                harness = self.harness()
+                outside = harness.temporary / "outside"
+                outside.mkdir()
+                alias = harness.repository / relative
+                alias.parent.mkdir(parents=True, exist_ok=True)
+                alias.symlink_to(outside, target_is_directory=True)
+                before = self.snapshot(harness)
+                harness.plan("success")
+                result = harness.run()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.snapshot(harness), before)
+                self.assertEqual(list(outside.iterdir()), [])
+                self.assertFalse(harness.record.exists())
+                self.assertNotIn(b"Built voicebox-server-", result.stdout)
+
+    def test_destination_ancestor_links_are_refused_before_any_outside_write(self) -> None:
+        for relative in ("tauri", "tauri/src-tauri", "tauri/src-tauri/binaries"):
+            with self.subTest(relative=relative):
+                harness = self.harness()
+                target = harness.repository / relative
+                outside = harness.temporary / "outside"
+                target.rename(outside)
+                target.symlink_to(outside, target_is_directory=True)
+                before = self.snapshot(harness)
+                harness.plan("success")
+                result = harness.run()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(self.snapshot(harness), before)
+                self.assertFalse(harness.record.exists())
+                self.assertNotIn(b"Built voicebox-server-", result.stdout)
+
+    def test_produced_stage_and_dist_aliases_are_not_collected(self) -> None:
+        for mode in ("aliased_stage", "aliased_dist"):
+            with self.subTest(mode=mode):
+                harness = self.harness()
+                before = self.snapshot(harness)
+                outside = harness.temporary / "outside"
+                harness.plan(mode, outside=str(outside))
+                self.assertPreserved(harness, before, harness.run())
+                output = outside / "dist" if mode == "aliased_stage" else outside
+                self.assertEqual((output / "voicebox-server").read_bytes(), b"fresh-sidecar")
 
 
 class StubbedPyInstaller:
