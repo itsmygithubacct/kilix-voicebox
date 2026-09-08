@@ -95,6 +95,11 @@ outputs carry their mode, request digest, engine/model revision, seed and audio
 digest in versioned private provenance; cloned outputs retain their existing
 sample-consent binding.
 
+Voicebox accepts and generates seeds from 0 through 9007199254740991 so the
+browser, provider request and stored provenance keep the same exact integer.
+Canonical WAV headers are checked against the bytes copied into private storage,
+alongside their exact size and digest, before audio or provenance is published.
+
 Generated audio is retrieved by opaque identifier at `/audio/{generation_id}`.
 Provider installation and model selection are content-owned operations and are
 not implemented by Voicebox.

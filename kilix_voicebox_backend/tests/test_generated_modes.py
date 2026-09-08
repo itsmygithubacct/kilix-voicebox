@@ -16,7 +16,9 @@ from pydantic import ValidationError
 from kilix_voicebox_backend import models
 from kilix_voicebox_backend.kilix_provider import ProviderError, ProviderReply, QWEN_ENDPOINT
 from kilix_voicebox_backend.orchestrator import VoiceboxOrchestrator
-from kilix_voicebox_backend.private_store import PrivateVoiceStore, StoreError
+from kilix_voicebox_backend.private_store import (
+    GeneratedVoiceProvenance, PrivateVoiceStore, StoreError,
+)
 
 
 def wav_bytes():
@@ -116,11 +118,99 @@ class GeneratedModesTests(unittest.TestCase):
                    {"mode": "named_voice", "voice_id": "Vivian", "description": "warm"},
                    {"mode": "voice_design", "description": "warm", "consent_asserted": True},
                    {"mode": "named_voice", "voice_id": "Vivian", "seed": True},
+                   {"mode": "named_voice", "voice_id": "Vivian", "seed": 2**53},
                    {"mode": "named_voice", "voice_id": "Vivian", "seed": 2**63}]
         for extra in invalid:
             with self.subTest(extra=extra), self.assertRaises(ValidationError):
                 models.GenerationRequest(profile_id="profile", text="hello", **extra)
         self.assertEqual(models.GenerationRequest(profile_id="profile", text="hello").mode, "prompt_clone")
+
+    def test_random_and_explicit_seeds_remain_exact_browser_integers(self):
+        from unittest.mock import patch
+        maximum = 2**53 - 1
+        arguments = dict(mode="named_voice", text="Hello there.", language="en", voice_id="Vivian")
+        with patch("kilix_voicebox_backend.orchestrator.secrets.randbits", return_value=maximum) as random:
+            result = self.orchestrator.synthesize_generated(**arguments)
+        random.assert_called_once_with(53)
+        self.assertEqual(result["seed"], maximum)
+        self.assertEqual(self.store.generation_provenance(result["generation_id"])["seed"], maximum)
+        self.assertEqual(int(float(result["seed"])), maximum)
+        self.assertEqual(models.GenerationRequest(profile_id="profile", text="hello", seed=maximum).seed, maximum)
+        with self.assertRaises(ProviderError) as caught:
+            self.orchestrator.synthesize_generated(**arguments, seed=2**53)
+        self.assertEqual(caught.exception.code, "INVALID_SEED")
+
+    def test_changed_header_after_inspection_refuses_named_design_and_clone(self):
+        good = wav_bytes()
+        bad = good[:28] + (1).to_bytes(4, "little") + good[32:]
+        for mode in ("named_voice", "voice_design", "prompt_clone"):
+            with self.subTest(mode=mode):
+                path = self.root / "mutable-result.wav"
+                path.write_bytes(good)
+                writer = os.open(path, os.O_RDWR | os.O_CLOEXEC)
+                reader = os.open(path, os.O_RDONLY | os.O_CLOEXEC)
+                path.unlink()
+                model, revision = ("qwen3-tts-0.6b-customvoice", "85e237c12c027371202489a0ec509ded67b5e4b5")
+                if mode == "voice_design":
+                    model, revision = "qwen3-tts-1.7b-voicedesign", "5ecdb67327fd37bb2e042aab12ff7391903235d3"
+                result = {"engine_id": "qwen3-tts", "engine_revision": "6cafe5582caea83df269c36b1ce62d953a9cc66b",
+                          "model_id": model, "model_revision": revision, "duration_ms": 10, "seed": 7,
+                          "audio": {"sha256": hashlib.sha256(bad).hexdigest(), "byte_length": len(bad)}}
+                reply = ProviderReply({"type": "result", "result": result}, (reader,))
+                self.replies.append(reply)
+                commit = self.store.commit_generation
+                def change_before_copy(**kwargs):
+                    self.assertEqual(os.pwrite(writer, bad, 0), len(bad))
+                    return commit(**kwargs)
+                try:
+                    with patch.object(self.store, "commit_generation", side_effect=change_before_copy):
+                        if mode == "prompt_clone":
+                            sample = self.root / "sample.wav"
+                            sample.write_bytes(good)
+                            consent = self.store.attest_sample(profile_id="fixture", sample_path=sample,
+                                                              asserted_by_user=True)
+                            result["conditioning"] = {"prompt_sha256": consent.source_sha256,
+                                                       "consent_sha256": consent.sha256}
+                            call = lambda: self.orchestrator._commit_synthesis_reply(
+                                reply, generation_id="clone-fixture", job_id="clone-job",
+                                source_sha256=consent.source_sha256, consent_sha256=consent.sha256, seed=7)
+                        else:
+                            self.qwen.request.side_effect = lambda *args: reply
+                            call = lambda: self.synthesize(mode)
+                        with self.assertRaises(StoreError) as caught:
+                            call()
+                    self.assertEqual(caught.exception.code, "OUTPUT_FORMAT")
+                    self.assertEqual(list(self.store.generation_root.iterdir()), [])
+                    self.assertEqual(reply.descriptors, ())
+                    self.assertFalse(list(self.store.consent_root.glob("*.derived-output.json")))
+                finally:
+                    os.close(writer)
+
+    def test_copied_header_validation_handles_short_reads_and_refuses_growth(self):
+        good = wav_bytes()
+        class ShortSource(io.BytesIO):
+            def read(self, count):
+                return super().read(min(count, 7))
+        for index, payload in enumerate((good, good[:28] + (1).to_bytes(4, "little") + good[32:], good + b"extra")):
+            with self.subTest(index=index):
+                provenance = GeneratedVoiceProvenance.create(
+                    generation_id=f"short-{index}", job_id=f"job-{index}", provider="kilix-qwen-tts",
+                    model_id="qwen3-tts-0.6b-customvoice", model_revision="85e237c12c027371202489a0ec509ded67b5e4b5",
+                    engine_id="qwen3-tts", engine_revision="6cafe5582caea83df269c36b1ce62d953a9cc66b",
+                    output_sha256=hashlib.sha256(payload).hexdigest(), output_bytes=len(good),
+                    mode="named_voice", request_sha256="0" * 64, seed=7)
+                source = ShortSource(payload)
+                if index == 0:
+                    destination = self.store.commit_generation(source=source, provenance=provenance,
+                                                               expected_prefix=good[:44])
+                    self.assertEqual(destination.read_bytes(), good)
+                else:
+                    with self.assertRaises(StoreError):
+                        self.store.commit_generation(source=source, provenance=provenance,
+                                                     expected_prefix=good[:44])
+                    self.assertFalse((self.store.generation_root / f"short-{index}.wav").exists())
+                self.assertLessEqual(source.tell(), len(good) + 1)
+                self.assertFalse(list(self.store.generation_root.glob("*.partial")))
 
     def test_generated_route_never_resolves_or_reads_a_profile_sample(self):
         from kilix_voicebox_backend.main import generate_speech

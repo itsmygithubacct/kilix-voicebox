@@ -533,11 +533,19 @@ class PrivateVoiceStore:
         source: BinaryIO,
         provenance: GenerationProvenance | GeneratedVoiceProvenance,
         suffix: str = ".wav",
+        expected_prefix: bytes | None = None,
     ) -> Path:
         _require(suffix in {".wav", ".flac", ".opus"}, "OUTPUT_FORMAT",
                  "generation format is unsupported")
         _require(provenance.provider == "kilix-qwen-tts", "INVALID_RECORD",
                  "generation provider is unsupported")
+        _require(type(provenance.output_bytes) is int
+                 and 0 < provenance.output_bytes <= MAX_GENERATION_BYTES,
+                 "OUTPUT_SIZE", "generation size is outside its byte bound")
+        _require(expected_prefix is None or (
+            type(expected_prefix) is bytes and 0 < len(expected_prefix) <= 4096
+            and len(expected_prefix) <= provenance.output_bytes),
+            "OUTPUT_FORMAT", "generation prefix constraint is invalid")
         clone = isinstance(provenance, GenerationProvenance)
         if clone:
             consent_record = _read_private_record(
@@ -561,6 +569,7 @@ class PrivateVoiceStore:
         descriptor = -1
         digest = hashlib.sha256()
         total = 0
+        copied_prefix = b""
         destination_created = False
         provenance_created = False
         output_link_created = False
@@ -576,13 +585,20 @@ class PrivateVoiceStore:
                 0o600,
             )
             while True:
-                chunk = source.read(1024 * 1024)
+                # Read at most the advertised population plus one byte to
+                # refuse growth. Format checks use these very same copied
+                # bytes, never an earlier read of a peer's mutable inode.
+                chunk = source.read(min(1024 * 1024, provenance.output_bytes + 1 - total))
                 if not chunk:
                     break
                 _require(type(chunk) is bytes, "OUTPUT_READ", "generation source returned non-bytes")
                 total += len(chunk)
                 _require(total <= MAX_GENERATION_BYTES, "OUTPUT_SIZE",
                          "generation exceeds its byte bound")
+                _require(total <= provenance.output_bytes, "OUTPUT_DIGEST",
+                         "generation exceeds its declared byte population")
+                if expected_prefix is not None and len(copied_prefix) < len(expected_prefix):
+                    copied_prefix += chunk[:len(expected_prefix) - len(copied_prefix)]
                 digest.update(chunk)
                 view = memoryview(chunk)
                 while view:
@@ -591,6 +607,8 @@ class PrivateVoiceStore:
                     view = view[written:]
             _require(total == provenance.output_bytes and digest.hexdigest() == provenance.output_sha256,
                      "OUTPUT_DIGEST", "generation bytes disagree with provenance")
+            _require(expected_prefix is None or copied_prefix == expected_prefix,
+                     "OUTPUT_FORMAT", "copied generation bytes disagree with their format")
             os.fsync(descriptor)
             os.close(descriptor)
             descriptor = -1

@@ -26,6 +26,9 @@ Linux requires a same-UID peer through `SO_PEERCRED`.
 - Voice cloning is refused without an explicit user consent assertion.
 - Named voices and voice design record mode/request/engine/model/seed/output
   identities in private versioned provenance. They do not create sample consent.
+- All synthesis modes bind the canonical WAV prefix to the same bounded copy
+  whose bytes are hashed and committed. A provider's writable alias cannot swap
+  a different header after an earlier descriptor inspection.
 - Consent binds the canonical PCM digest, original container digest, capture
   time, declared use, model revision request, and later output provenance.
 - Transcription passes one bounded descriptor and retains no extra product copy.

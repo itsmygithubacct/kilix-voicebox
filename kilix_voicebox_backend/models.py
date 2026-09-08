@@ -68,7 +68,7 @@ class GenerationRequest(BaseModel):
     profile_id: str
     text: str = Field(..., min_length=1, max_length=5000)
     language: str = Field(default="en", pattern="^(zh|en|ja|ko|de|fr|ru|pt|es|it)$")
-    seed: Optional[StrictInt] = Field(None, ge=0, lt=2**63)
+    seed: Optional[StrictInt] = Field(None, ge=0, lt=2**53)
     instruct: Optional[str] = Field(None, max_length=500)
     consent_asserted: StrictBool = False
     mode: Literal["prompt_clone", "named_voice", "voice_design"] = "prompt_clone"

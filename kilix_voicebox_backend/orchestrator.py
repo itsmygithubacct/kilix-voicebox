@@ -177,6 +177,12 @@ def _validate_wav_descriptor(descriptor: int, output_bytes: int, duration_ms: in
     os.lseek(descriptor, 0, os.SEEK_SET)
 
 
+def _canonical_wav_header(duration_ms: int) -> bytes:
+    size = duration_ms * 48
+    return struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", size + 36, b"WAVE",
+                       b"fmt ", 16, 1, 1, 24_000, 48_000, 2, 16, b"data", size)
+
+
 def _audio_media_type(descriptor: int) -> str:
     try:
         header = os.pread(descriptor, 12, 0)
@@ -219,8 +225,8 @@ class VoiceboxOrchestrator:
         language = _text(language, 64, "INVALID_LANGUAGE")
         if instruction is not None:
             instruction = _text(instruction, MAX_INSTRUCTION_BYTES, "INVALID_INSTRUCTION")
-        _require(seed is None or (type(seed) is int and 0 <= seed < 2**63), "INVALID_SEED")
-        selected_seed = secrets.randbits(63) if seed is None else seed
+        _require(seed is None or (type(seed) is int and 0 <= seed < 2**53), "INVALID_SEED")
+        selected_seed = secrets.randbits(53) if seed is None else seed
         pcm, container_sha256, frame_count, duration_ms = _prompt_pcm(sample_path)
         consent = self.store.attest_sample(
             profile_id=profile_id,
@@ -294,8 +300,8 @@ class VoiceboxOrchestrator:
                  "UNSUPPORTED_CAPABILITY")
         text = _text(text, MAX_TEXT_BYTES, "INVALID_TEXT")
         language = _text(language, 64, "INVALID_LANGUAGE")
-        _require(seed is None or (type(seed) is int and 0 <= seed < 2**63), "INVALID_SEED")
-        selected_seed = secrets.randbits(63) if seed is None else seed
+        _require(seed is None or (type(seed) is int and 0 <= seed < 2**53), "INVALID_SEED")
+        selected_seed = secrets.randbits(53) if seed is None else seed
         arguments = {
             "task": "synthesize", "mode": mode, "text": text, "language": language,
             "model_id": "auto", "seed": selected_seed, "max_duration_ms": 900_000,
@@ -342,8 +348,7 @@ class VoiceboxOrchestrator:
             descriptor = reply.descriptors[0]
             info = os.fstat(descriptor)
             size = duration * 48
-            header = struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", size + 36, b"WAVE",
-                                 b"fmt ", 16, 1, 1, 24_000, 48_000, 2, 16, b"data", size)
+            header = _canonical_wav_header(duration)
             _require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
                      and info.st_size == size + 44
                      and fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY
@@ -360,7 +365,8 @@ class VoiceboxOrchestrator:
             )
             with os.fdopen(os.dup(descriptor), "rb", closefd=True) as source:
                 source.seek(0)
-                destination = self.store.commit_generation(source=source, provenance=provenance)
+                destination = self.store.commit_generation(
+                    source=source, provenance=provenance, expected_prefix=header)
             return {"generation_id": generation_id, "job_id": job_id, "mode": mode,
                     "model_id": result["model_id"], "model_revision": result["model_revision"],
                     "output_sha256": audio["sha256"], "output_bytes": audio["byte_length"],
@@ -413,7 +419,9 @@ class VoiceboxOrchestrator:
                 consent_sha256=consent_sha256,
             )
             with os.fdopen(os.dup(reply.descriptors[0]), "rb", closefd=True) as source:
-                destination = self.store.commit_generation(source=source, provenance=provenance)
+                destination = self.store.commit_generation(
+                    source=source, provenance=provenance,
+                    expected_prefix=_canonical_wav_header(duration_ms))
             return {
                 "generation_id": generation_id,
                 "job_id": job_id,

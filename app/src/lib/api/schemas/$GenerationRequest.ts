@@ -23,7 +23,7 @@ export const $GenerationRequest = {
             type: 'any-of',
             contains: [{
                 type: 'number',
-                exclusiveMaximum: 9223372036854776000,
+                exclusiveMaximum: 9007199254740992,
             }, {
                 type: 'null',
             }],

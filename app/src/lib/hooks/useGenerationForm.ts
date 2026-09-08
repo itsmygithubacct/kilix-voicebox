@@ -12,7 +12,7 @@ const generationSchema = z
   .object({
     text: z.string().min(1, 'Text is required').max(5000),
     language: z.enum(LANGUAGE_CODES as [LanguageCode, ...LanguageCode[]]),
-    seed: z.number().int().optional(),
+    seed: z.number().int().min(0).max(Number.MAX_SAFE_INTEGER).optional(),
     instruct: z.string().max(500).optional(),
     consentAsserted: z.boolean(),
     mode: z.enum(['prompt_clone', 'named_voice', 'voice_design']),
@@ -106,7 +106,12 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
       const audioUrl = apiClient.getAudioUrl(result.id);
       setAudioWithAutoPlay(audioUrl, result.id, selectedProfileId, data.text.substring(0, 50));
 
-      form.reset();
+      const current = form.getValues();
+      form.reset({
+        ...current,
+        text: current.text === data.text ? '' : current.text,
+        consentAsserted: false,
+      });
       options.onSuccess?.(result.id);
     } catch (error) {
       toast({
