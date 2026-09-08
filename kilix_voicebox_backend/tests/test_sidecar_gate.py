@@ -636,9 +636,9 @@ class BuildOrderingTests(unittest.TestCase):
         self.assertEqual(recorded, ['server-start', 'server-end', 'tauri-start', 'tauri-end'])
         # The requested route is the current one, and exactly one
         # producer-bearing operation ran under it.
-        self.assertEqual(paths['route-script'].read_text().strip(), 'tools/build_sidecar.py')
-        self.assertEqual(paths['route-package'].read_text().strip(),
-                         'cd tauri && bun run tauri build')
+        self.assertEqual(paths['route-script'].read_bytes(), b'tools/build_sidecar.py\n')
+        self.assertEqual(paths['route-package'].read_bytes(),
+                         b'cd tauri && bun run tauri build\n')
         self.assertEqual(recorded.count('server-start'), 1)
 
     def test_a_failed_producer_bearing_step_never_reaches_packaging(self):
@@ -659,7 +659,7 @@ class BuildOrderingTests(unittest.TestCase):
         self.assertFalse(paths['packaging-started'].exists(),
                          'packaging started despite a failed producer-bearing step')
         # The route was still the real one, and it was requested exactly once.
-        self.assertEqual(paths['route-script'].read_text().strip(), 'tools/build_sidecar.py')
+        self.assertEqual(paths['route-script'].read_bytes(), b'tools/build_sidecar.py\n')
         self.assertEqual(recorded.count('server-start'), 1)
 
 
