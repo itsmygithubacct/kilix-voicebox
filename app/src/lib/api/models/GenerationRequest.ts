@@ -12,4 +12,14 @@ export type GenerationRequest = {
     seed?: (number | null);
     instruct?: (string | null);
     consent_asserted?: boolean;
+    mode?: GenerationRequest.mode;
+    voice_id?: (string | null);
+    description?: (string | null);
 };
+export namespace GenerationRequest {
+    export enum mode {
+        PROMPT_CLONE = 'prompt_clone',
+        NAMED_VOICE = 'named_voice',
+        VOICE_DESIGN = 'voice_design',
+    }
+}

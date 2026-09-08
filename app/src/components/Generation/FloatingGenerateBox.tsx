@@ -21,6 +21,7 @@ import { useAddStoryItem, useStory } from '@/lib/hooks/useStories';
 import { cn } from '@/lib/utils/cn';
 import { useStoryStore } from '@/stores/storyStore';
 import { useUIStore } from '@/stores/uiStore';
+import { VoiceModeFields } from './VoiceModeFields';
 
 interface FloatingGenerateBoxProps {
   isPlayerOpen?: boolean;
@@ -298,7 +299,11 @@ export function FloatingGenerateBox({
                 <div className="group relative">
                   <Button
                     type="submit"
-                    disabled={isPending || !selectedProfileId || !form.watch('consentAsserted')}
+                    disabled={
+                      isPending ||
+                      !selectedProfileId ||
+                      (form.watch('mode') === 'prompt_clone' && !form.watch('consentAsserted'))
+                    }
                     className="h-10 w-10 rounded-full bg-accent hover:bg-accent/90 hover:scale-105 text-accent-foreground shadow-lg hover:shadow-accent/50 transition-all duration-200"
                     size="icon"
                   >
@@ -313,7 +318,7 @@ export function FloatingGenerateBox({
                       ? 'Generating...'
                       : !selectedProfileId
                         ? 'Select a voice profile first'
-                        : !form.watch('consentAsserted')
+                        : form.watch('mode') === 'prompt_clone' && !form.watch('consentAsserted')
                           ? 'Confirm voice consent first'
                           : 'Generate speech'}
                   </span>
@@ -405,23 +410,26 @@ export function FloatingGenerateBox({
                     )}
                   />
                 </div>
-                <FormField
-                  control={form.control}
-                  name="consentAsserted"
-                  render={({ field }) => (
-                    <FormItem className="mt-3">
-                      <div className="flex items-start gap-2 rounded-xl border border-border p-2">
-                        <FormControl>
-                          <Checkbox checked={field.value} onCheckedChange={field.onChange} />
-                        </FormControl>
-                        <span className="text-xs text-muted-foreground">
-                          I have the speaker's permission to use this sample for voice cloning.
-                        </span>
-                      </div>
-                      <FormMessage className="text-xs" />
-                    </FormItem>
-                  )}
-                />
+                <VoiceModeFields form={form} />
+                {form.watch('mode') === 'prompt_clone' && (
+                  <FormField
+                    control={form.control}
+                    name="consentAsserted"
+                    render={({ field }) => (
+                      <FormItem className="mt-3">
+                        <div className="flex items-start gap-2 rounded-xl border border-border p-2">
+                          <FormControl>
+                            <Checkbox checked={field.value} onCheckedChange={field.onChange} />
+                          </FormControl>
+                          <span className="text-xs text-muted-foreground">
+                            I have the speaker's permission to use this sample for voice cloning.
+                          </span>
+                        </div>
+                        <FormMessage className="text-xs" />
+                      </FormItem>
+                    )}
+                  />
+                )}
               </motion.div>
             </AnimatePresence>
           </form>

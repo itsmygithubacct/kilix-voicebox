@@ -35,6 +35,9 @@ export interface GenerationRequest {
   seed?: number;
   instruct?: string;
   consent_asserted: boolean;
+  mode?: 'prompt_clone' | 'named_voice' | 'voice_design';
+  voice_id?: string;
+  description?: string;
 }
 
 export interface GenerationResponse {

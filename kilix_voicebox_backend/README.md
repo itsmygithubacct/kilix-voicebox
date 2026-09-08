@@ -7,7 +7,8 @@ providers. It does not own, import, install, download, or execute model runtimes
 
 - `kilix_provider.py` implements the bounded private Unix-socket transport.
 - `orchestrator.py` canonicalizes a single voice sample, obtains consent, passes
-  anonymous file descriptors to providers, and verifies returned output.
+  anonymous file descriptors to providers, and verifies returned output. Its
+  named/design paths use no sample descriptor or consent attestation.
 - `private_store.py` owns private consent, provenance, generation, and trash
   records.
 - `tts.py` and `transcribe.py` are provider clients only.
@@ -22,7 +23,9 @@ Linux requires a same-UID peer through `SO_PEERCRED`.
 ## Privacy behavior
 
 - Source audio remains private product data.
-- Synthesis is refused without an explicit user consent assertion.
+- Voice cloning is refused without an explicit user consent assertion.
+- Named voices and voice design record mode/request/engine/model/seed/output
+  identities in private versioned provenance. They do not create sample consent.
 - Consent binds the canonical PCM digest, original container digest, capture
   time, declared use, model revision request, and later output provenance.
 - Transcription passes one bounded descriptor and retains no extra product copy.

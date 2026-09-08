@@ -13,6 +13,7 @@ export const $StoryItemCreate = {
             type: 'any-of',
             contains: [{
                 type: 'number',
+                maximum: 900000,
             }, {
                 type: 'null',
             }],
@@ -21,6 +22,7 @@ export const $StoryItemCreate = {
             type: 'any-of',
             contains: [{
                 type: 'number',
+                maximum: 255,
             }, {
                 type: 'null',
             }],

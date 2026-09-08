@@ -23,6 +23,7 @@ export const $GenerationRequest = {
             type: 'any-of',
             contains: [{
                 type: 'number',
+                exclusiveMaximum: 9223372036854776000,
             }, {
                 type: 'null',
             }],
@@ -38,6 +39,29 @@ export const $GenerationRequest = {
         },
         consent_asserted: {
             type: 'boolean',
+        },
+        mode: {
+            type: 'Enum',
+        },
+        voice_id: {
+            type: 'any-of',
+            contains: [{
+                type: 'string',
+                maxLength: 64,
+                minLength: 1,
+            }, {
+                type: 'null',
+            }],
+        },
+        description: {
+            type: 'any-of',
+            contains: [{
+                type: 'string',
+                maxLength: 4096,
+                minLength: 1,
+            }, {
+                type: 'null',
+            }],
         },
     },
 } as const;

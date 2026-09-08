@@ -24,6 +24,7 @@ import { LANGUAGE_OPTIONS } from '@/lib/constants/languages';
 import { useGenerationForm } from '@/lib/hooks/useGenerationForm';
 import { useProfile } from '@/lib/hooks/useProfiles';
 import { useUIStore } from '@/stores/uiStore';
+import { VoiceModeFields } from './VoiceModeFields';
 
 export function GenerationForm() {
   const selectedProfileId = useUIStore((state) => state.selectedProfileId);
@@ -43,6 +44,7 @@ export function GenerationForm() {
       <CardContent>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-4">
+            <VoiceModeFields form={form} />
             <div>
               <FormLabel>Voice Profile</FormLabel>
               {selectedProfile ? (
@@ -148,32 +150,38 @@ export function GenerationForm() {
               />
             </div>
 
-            <FormField
-              control={form.control}
-              name="consentAsserted"
-              render={({ field }) => (
-                <FormItem>
-                  <div className="flex items-start gap-3 rounded-md border p-3">
-                    <FormControl>
-                      <Checkbox checked={field.value} onCheckedChange={field.onChange} />
-                    </FormControl>
-                    <div>
-                      <FormLabel>I have permission to use this voice sample</FormLabel>
-                      <FormDescription>
-                        Voice cloning requires the speaker's consent. Voicebox records this
-                        attestation with the source digest and derived-output provenance.
-                      </FormDescription>
+            {form.watch('mode') === 'prompt_clone' && (
+              <FormField
+                control={form.control}
+                name="consentAsserted"
+                render={({ field }) => (
+                  <FormItem>
+                    <div className="flex items-start gap-3 rounded-md border p-3">
+                      <FormControl>
+                        <Checkbox checked={field.value} onCheckedChange={field.onChange} />
+                      </FormControl>
+                      <div>
+                        <FormLabel>I have permission to use this voice sample</FormLabel>
+                        <FormDescription>
+                          Voice cloning requires the speaker's consent. Voicebox records this
+                          attestation with the source digest and derived-output provenance.
+                        </FormDescription>
+                      </div>
                     </div>
-                  </div>
-                  <FormMessage />
-                </FormItem>
-              )}
-            />
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+            )}
 
             <Button
               type="submit"
               className="w-full"
-              disabled={isPending || !selectedProfileId || !form.watch('consentAsserted')}
+              disabled={
+                isPending ||
+                !selectedProfileId ||
+                (form.watch('mode') === 'prompt_clone' && !form.watch('consentAsserted'))
+              }
             >
               {isPending ? (
                 <>

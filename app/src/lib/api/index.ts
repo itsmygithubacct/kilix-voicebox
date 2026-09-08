@@ -15,7 +15,7 @@ export type { Body_import_profile_profiles_import_post } from './models/Body_imp
 export type { Body_transcribe_audio_transcribe_post } from './models/Body_transcribe_audio_transcribe_post';
 export type { Body_upload_profile_avatar_profiles__profile_id__avatar_post } from './models/Body_upload_profile_avatar_profiles__profile_id__avatar_post';
 export type { ChannelVoiceAssignment } from './models/ChannelVoiceAssignment';
-export type { GenerationRequest } from './models/GenerationRequest';
+export { GenerationRequest } from './models/GenerationRequest';
 export type { GenerationResponse } from './models/GenerationResponse';
 export type { HealthResponse } from './models/HealthResponse';
 export type { HistoryListResponse } from './models/HistoryListResponse';

@@ -5,9 +5,11 @@ from __future__ import annotations
 import hashlib
 import fcntl
 import io
+import json
 import os
 import secrets
 import stat
+import struct
 import tempfile
 import uuid
 import wave
@@ -18,6 +20,7 @@ from .kilix_provider import ProviderClient, ProviderError, ProviderReply, decode
 from .private_store import (
     MAX_SAMPLE_BYTES,
     GenerationProvenance,
+    GeneratedVoiceProvenance,
     PrivateVoiceStore,
     StoreError,
     read_owned_sample,
@@ -27,6 +30,11 @@ from .private_store import (
 MAX_TEXT_BYTES = 16_384
 MAX_INSTRUCTION_BYTES = 4_096
 MAX_TRANSCRIPT_BYTES = 16 * 1024 * 1024
+_GENERATED_MODELS = {
+    "qwen3-tts-0.6b-customvoice": ("85e237c12c027371202489a0ec509ded67b5e4b5", "named_voice"),
+    "qwen3-tts-1.7b-customvoice": ("0c0e3051f131929182e2c023b9537f8b1c68adfe", "named_voice"),
+    "qwen3-tts-1.7b-voicedesign": ("5ecdb67327fd37bb2e042aab12ff7391903235d3", "voice_design"),
+}
 
 
 def _transcript_result(reply: ProviderReply) -> dict[str, Any]:
@@ -269,6 +277,94 @@ class VoiceboxOrchestrator:
             consent_sha256=consent.sha256,
             seed=selected_seed,
         )
+
+    def synthesize_generated(
+        self,
+        *,
+        mode: str,
+        text: str,
+        language: str,
+        voice_id: str | None = None,
+        description: str | None = None,
+        instruction: str | None = None,
+        seed: int | None = None,
+    ) -> dict[str, Any]:
+        """Use a model's built-in voice or design mode without a sample upload."""
+        _require(type(mode) is str and mode in {"named_voice", "voice_design"},
+                 "UNSUPPORTED_CAPABILITY")
+        text = _text(text, MAX_TEXT_BYTES, "INVALID_TEXT")
+        language = _text(language, 64, "INVALID_LANGUAGE")
+        _require(seed is None or (type(seed) is int and 0 <= seed < 2**63), "INVALID_SEED")
+        selected_seed = secrets.randbits(63) if seed is None else seed
+        arguments = {
+            "task": "synthesize", "mode": mode, "text": text, "language": language,
+            "model_id": "auto", "seed": selected_seed, "max_duration_ms": 900_000,
+            "output": {"sample_format": "s16le", "sample_rate_hz": 24_000, "channels": 1},
+        }
+        if mode == "named_voice":
+            _require(description is None, "INVALID_REQUEST")
+            arguments["voice_id"] = _text(voice_id, 64, "INVALID_VOICE")
+        else:
+            _require(voice_id is None, "INVALID_REQUEST")
+            arguments["description"] = _text(description, MAX_INSTRUCTION_BYTES,
+                                              "INVALID_DESCRIPTION")
+        if instruction is not None:
+            arguments["instruction"] = _text(instruction, MAX_INSTRUCTION_BYTES,
+                                              "INVALID_INSTRUCTION")
+        generation_id = uuid.uuid4().hex
+        job_id = f"voicebox-{generation_id}"
+        request = {"schema": self.qwen.endpoint.schema, "type": "request",
+                   "request_id": uuid.uuid4().hex, "op": "submit", "job_id": job_id,
+                   "deadline_ms": 3_600_000, "args": arguments}
+        request_digest = hashlib.sha256(json.dumps(arguments, sort_keys=True,
+                                                  separators=(",", ":")).encode()).hexdigest()
+        with self.qwen.request(request) as reply:
+            _require(reply.payload.get("type") == "result" and len(reply.descriptors) == 1,
+                     "INVALID_RESPONSE")
+            result = reply.payload.get("result")
+            _require(type(result) is dict and set(result) == {
+                "engine_id", "engine_revision", "model_id", "model_revision", "duration_ms",
+                "seed", "audio",
+            }, "INVALID_RESPONSE")
+            _require(result["engine_id"] == "qwen3-tts"
+                     and result["engine_revision"] == "6cafe5582caea83df269c36b1ce62d953a9cc66b",
+                     "INVALID_RESPONSE")
+            _require(type(result["model_id"]) is str
+                     and _GENERATED_MODELS.get(result["model_id"]) == (result["model_revision"], mode),
+                     "INVALID_RESPONSE")
+            _require(type(result["seed"]) is int and result["seed"] == selected_seed,
+                     "INVALID_RESPONSE")
+            duration = result["duration_ms"]
+            _require(type(duration) is int and 0 < duration <= 900_000, "INVALID_RESPONSE")
+            audio = result["audio"]
+            _require(type(audio) is dict and set(audio) == {"byte_length", "sha256"},
+                     "INVALID_RESPONSE")
+            descriptor = reply.descriptors[0]
+            info = os.fstat(descriptor)
+            size = duration * 48
+            header = struct.pack("<4sI4s4sIHHIIHH4sI", b"RIFF", size + 36, b"WAVE",
+                                 b"fmt ", 16, 1, 1, 24_000, 48_000, 2, 16, b"data", size)
+            _require(stat.S_ISREG(info.st_mode) and info.st_uid == os.geteuid()
+                     and info.st_size == size + 44
+                     and fcntl.fcntl(descriptor, fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY
+                     and os.pread(descriptor, 44, 0) == header,
+                     "INVALID_RESPONSE")
+            _require(type(audio["byte_length"]) is int and audio["byte_length"] == size + 44,
+                     "INVALID_RESPONSE")
+            provenance = GeneratedVoiceProvenance.create(
+                generation_id=generation_id, job_id=job_id, provider="kilix-qwen-tts",
+                model_id=result["model_id"], model_revision=result["model_revision"],
+                engine_id=result["engine_id"], engine_revision=result["engine_revision"],
+                output_sha256=audio["sha256"], output_bytes=audio["byte_length"],
+                mode=mode, request_sha256=request_digest, seed=selected_seed,
+            )
+            with os.fdopen(os.dup(descriptor), "rb", closefd=True) as source:
+                source.seek(0)
+                destination = self.store.commit_generation(source=source, provenance=provenance)
+            return {"generation_id": generation_id, "job_id": job_id, "mode": mode,
+                    "model_id": result["model_id"], "model_revision": result["model_revision"],
+                    "output_sha256": audio["sha256"], "output_bytes": audio["byte_length"],
+                    "duration_ms": duration, "seed": selected_seed, "stored_name": destination.name}
 
     def _commit_synthesis_reply(
         self,

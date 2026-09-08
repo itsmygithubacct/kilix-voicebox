@@ -60,4 +60,6 @@ npx --no-install openapi-typescript-codegen \
     --useOptions \
     --exportSchemas true
 
+python3 -I "$REPO_ROOT/tools/redact_generated_client.py"
+
 echo "Generated the Voicebox API client from 1/1 isolated schema source."

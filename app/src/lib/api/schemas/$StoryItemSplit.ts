@@ -8,6 +8,7 @@ export const $StoryItemSplit = {
         split_time_ms: {
             type: 'number',
             isRequired: true,
+            maximum: 900000,
         },
     },
 } as const;

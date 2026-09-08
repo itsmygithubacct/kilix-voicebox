@@ -448,24 +448,11 @@ export function ProfileForm() {
           description: `"${data.name}" has been updated successfully.`,
         });
       } else {
-        // Creating: require sample file and reference text
+        // A sample is optional for built-in/design generation; cloning still needs one.
         const sampleFile = form.getValues('sampleFile');
-        const referenceText = form.getValues('referenceText');
+        const referenceText = form.getValues('referenceText') || '';
 
-        if (!sampleFile) {
-          form.setError('sampleFile', {
-            type: 'manual',
-            message: 'Audio sample is required',
-          });
-          toast({
-            title: 'Audio sample required',
-            description: 'Please provide an audio sample to create the voice profile.',
-            variant: 'destructive',
-          });
-          return;
-        }
-
-        if (!referenceText || referenceText.trim().length === 0) {
+        if (sampleFile && referenceText.trim().length === 0) {
           form.setError('referenceText', {
             type: 'manual',
             message: 'Reference text is required',
@@ -479,34 +466,36 @@ export function ProfileForm() {
         }
 
         // Validate audio duration before creating profile
-        try {
-          const duration = await getAudioDuration(sampleFile);
-          if (duration > MAX_AUDIO_DURATION_SECONDS) {
+        if (sampleFile) {
+          try {
+            const duration = await getAudioDuration(sampleFile);
+            if (duration > MAX_AUDIO_DURATION_SECONDS) {
+              form.setError('sampleFile', {
+                type: 'manual',
+                message: `Audio is too long (${formatAudioDuration(duration)}). Maximum duration is ${formatAudioDuration(MAX_AUDIO_DURATION_SECONDS)}.`,
+              });
+              toast({
+                title: 'Invalid audio file',
+                description: `Audio duration is ${formatAudioDuration(duration)}, but maximum is ${formatAudioDuration(MAX_AUDIO_DURATION_SECONDS)}.`,
+                variant: 'destructive',
+              });
+              return; // Prevent form submission
+            }
+          } catch (error) {
             form.setError('sampleFile', {
               type: 'manual',
-              message: `Audio is too long (${formatAudioDuration(duration)}). Maximum duration is ${formatAudioDuration(MAX_AUDIO_DURATION_SECONDS)}.`,
+              message: 'Failed to validate audio file. Please try a different file.',
             });
             toast({
-              title: 'Invalid audio file',
-              description: `Audio duration is ${formatAudioDuration(duration)}, but maximum is ${formatAudioDuration(MAX_AUDIO_DURATION_SECONDS)}.`,
+              title: 'Validation error',
+              description: error instanceof Error ? error.message : 'Failed to validate audio file',
               variant: 'destructive',
             });
             return; // Prevent form submission
           }
-        } catch (error) {
-          form.setError('sampleFile', {
-            type: 'manual',
-            message: 'Failed to validate audio file. Please try a different file.',
-          });
-          toast({
-            title: 'Validation error',
-            description: error instanceof Error ? error.message : 'Failed to validate audio file',
-            variant: 'destructive',
-          });
-          return; // Prevent form submission
         }
 
-        // Creating: create profile, then add sample
+        // Create the history profile, then attach a sample only when provided.
         const profile = await createProfile.mutateAsync({
           name: data.name,
           description: data.description,
@@ -514,11 +503,13 @@ export function ProfileForm() {
         });
 
         try {
-          await addSample.mutateAsync({
-            profileId: profile.id,
-            file: sampleFile,
-            referenceText: referenceText,
-          });
+          if (sampleFile) {
+            await addSample.mutateAsync({
+              profileId: profile.id,
+              file: sampleFile,
+              referenceText,
+            });
+          }
 
           // Handle avatar upload if provided
           if (data.avatarFile) {
@@ -539,7 +530,9 @@ export function ProfileForm() {
 
           toast({
             title: 'Profile created',
-            description: `"${data.name}" has been created with a sample.`,
+            description: sampleFile
+              ? `"${data.name}" has been created with a sample.`
+              : `"${data.name}" is ready to group built-in or designed voice generations.`,
           });
         } catch (sampleError) {
           // Profile was created but sample failed - still show error
@@ -657,6 +650,10 @@ export function ProfileForm() {
                 <div className="space-y-4 border-r pr-6">
                   {isCreating ? (
                     <>
+                      <p className="text-sm text-muted-foreground pt-4">
+                        A sample is optional for built-in voices and voice design. Add one sample
+                        when you want to clone a voice with the speaker’s permission.
+                      </p>
                       <Tabs
                         className="pt-4"
                         value={sampleMode}

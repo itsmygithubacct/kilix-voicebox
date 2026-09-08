@@ -12,6 +12,7 @@ export const $StoryItemUpdateTime = {
         start_time_ms: {
             type: 'number',
             isRequired: true,
+            maximum: 900000,
         },
     },
 } as const;

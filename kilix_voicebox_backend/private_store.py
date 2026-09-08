@@ -370,6 +370,63 @@ class GenerationProvenance:
         )
 
 
+@dataclass(frozen=True, slots=True)
+class GeneratedVoiceProvenance:
+    """Named/design output identity without a fabricated sample consent record."""
+
+    schema: str
+    generation_id: str
+    job_id: str
+    provider: str
+    model_id: str
+    model_revision: str
+    output_sha256: str
+    output_bytes: int
+    mode: str
+    request_sha256: str
+    engine_id: str
+    engine_revision: str
+    seed: int
+    created_at: str
+
+    @classmethod
+    def create(cls, **values) -> "GeneratedVoiceProvenance":
+        record = {"schema": "kilix.voice.generation-provenance/candidate-v2",
+                  "created_at": _timestamp(), **values}
+        _validate_generated_voice_record(record)
+        return cls(**record)
+
+
+def _validate_generated_voice_record(record: dict) -> dict:
+    _require(set(record) == {
+        "schema", "generation_id", "job_id", "provider", "model_id", "model_revision",
+        "output_sha256", "output_bytes", "mode", "request_sha256", "engine_id",
+        "engine_revision", "seed", "created_at",
+    }, "INVALID_RECORD", "generated voice provenance has an invalid field population")
+    _require(record["schema"] == "kilix.voice.generation-provenance/candidate-v2",
+             "INVALID_RECORD", "generated voice provenance schema is unsupported")
+    for name in ("generation_id", "job_id", "provider", "model_id", "model_revision",
+                 "engine_id", "engine_revision"):
+        _identifier(record[name], name)
+    for name in ("output_sha256", "request_sha256"):
+        _digest(record[name], name)
+    _require(type(record["mode"]) is str and record["mode"] in {"named_voice", "voice_design"},
+             "INVALID_RECORD", "generated voice mode is invalid")
+    _require(record["provider"] == "kilix-qwen-tts" and record["engine_id"] == "qwen3-tts",
+             "INVALID_RECORD", "generated voice provider is invalid")
+    _require(type(record["seed"]) is int and 0 <= record["seed"] < 2**63,
+             "INVALID_RECORD", "generated voice seed is invalid")
+    _require(type(record["output_bytes"]) is int
+             and 0 < record["output_bytes"] <= MAX_GENERATION_BYTES,
+             "OUTPUT_SIZE", "output byte count is outside its bound")
+    _require(type(record["created_at"]) is str, "INVALID_RECORD", "creation time is invalid")
+    try:
+        datetime.strptime(record["created_at"], "%Y-%m-%dT%H:%M:%SZ")
+    except ValueError as error:
+        raise StoreError("INVALID_RECORD", "creation time is invalid") from error
+    return record
+
+
 class PrivateVoiceStore:
     """Provider-independent product data with private modes and atomic records."""
 
@@ -474,24 +531,30 @@ class PrivateVoiceStore:
         self,
         *,
         source: BinaryIO,
-        provenance: GenerationProvenance,
+        provenance: GenerationProvenance | GeneratedVoiceProvenance,
         suffix: str = ".wav",
     ) -> Path:
         _require(suffix in {".wav", ".flac", ".opus"}, "OUTPUT_FORMAT",
                  "generation format is unsupported")
         _require(provenance.provider == "kilix-qwen-tts", "INVALID_RECORD",
                  "generation provider is unsupported")
-        consent_record = _read_private_record(
-            self.consent_root / f"{provenance.consent_sha256}.json"
-        )
-        consent = _validated_consent_record(
-            consent_record, provenance.consent_sha256
-        )
-        _require(
-            consent.get("source_sha256") == provenance.source_sha256,
-            "INVALID_RECORD",
-            "generation provenance is not bound to stored consent",
-        )
+        clone = isinstance(provenance, GenerationProvenance)
+        if clone:
+            consent_record = _read_private_record(
+                self.consent_root / f"{provenance.consent_sha256}.json"
+            )
+            consent = _validated_consent_record(
+                consent_record, provenance.consent_sha256
+            )
+            _require(
+                consent.get("source_sha256") == provenance.source_sha256,
+                "INVALID_RECORD",
+                "generation provenance is not bound to stored consent",
+            )
+        else:
+            _require(isinstance(provenance, GeneratedVoiceProvenance),
+                     "INVALID_RECORD", "generation provenance type is invalid")
+            _validate_generated_voice_record(asdict(provenance))
         generation_id = _identifier(provenance.generation_id, "generation_id")
         destination = self.generation_root / f"{generation_id}{suffix}"
         temporary = self.generation_root / f".{generation_id}.{uuid.uuid4().hex}.partial"
@@ -505,7 +568,7 @@ class PrivateVoiceStore:
         output_link_path = (
             self.consent_root
             / f"{provenance.consent_sha256}.{generation_id}.derived-output.json"
-        )
+        ) if clone else None
         try:
             descriptor = os.open(
                 temporary,
@@ -536,25 +599,26 @@ class PrivateVoiceStore:
             temporary.unlink()
             self._atomic_record(provenance_path, asdict(provenance))
             provenance_created = True
-            self._atomic_record(output_link_path, {
-                "schema": "kilix.voicebox.consent-derived-output/candidate-v1",
-                "consent_sha256": provenance.consent_sha256,
-                "generation_id": provenance.generation_id,
-                "model_id": provenance.model_id,
-                "model_revision": provenance.model_revision,
-                "output_name": destination.name,
-                "output_sha256": provenance.output_sha256,
-                "provider": provenance.provider,
-                "source_sha256": provenance.source_sha256,
-            })
-            output_link_created = True
+            if clone:
+                self._atomic_record(output_link_path, {
+                    "schema": "kilix.voicebox.consent-derived-output/candidate-v1",
+                    "consent_sha256": provenance.consent_sha256,
+                    "generation_id": provenance.generation_id,
+                    "model_id": provenance.model_id,
+                    "model_revision": provenance.model_revision,
+                    "output_name": destination.name,
+                    "output_sha256": provenance.output_sha256,
+                    "provider": provenance.provider,
+                    "source_sha256": provenance.source_sha256,
+                })
+                output_link_created = True
             _fsync_directory(self.generation_root)
             return destination
         except (OSError, StoreError) as error:
             if descriptor >= 0:
                 os.close(descriptor)
             temporary.unlink(missing_ok=True)
-            if output_link_created:
+            if output_link_created and output_link_path is not None:
                 output_link_path.unlink(missing_ok=True)
             if provenance_created:
                 provenance_path.unlink(missing_ok=True)
@@ -586,11 +650,15 @@ class PrivateVoiceStore:
             self.generation_root / f"{identifier}.provenance.json"
         )
         _require(
-            value.get("schema") == "kilix.voice.generation-provenance/candidate-v1"
+            type(value.get("schema")) is str
+            and value["schema"] in {"kilix.voice.generation-provenance/candidate-v1",
+                                    "kilix.voice.generation-provenance/candidate-v2"}
             and value.get("generation_id") == identifier,
             "INVALID_RECORD",
             "generation provenance has the wrong identity",
         )
+        if value["schema"] == "kilix.voice.generation-provenance/candidate-v2":
+            _validate_generated_voice_record(value)
         return value
 
     def _owned_path_population(self, paths: Iterable[Path]) -> tuple[str, ...]:

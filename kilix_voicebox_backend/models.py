@@ -2,8 +2,8 @@
 Pydantic models for request/response validation.
 """
 
-from pydantic import BaseModel, Field, field_serializer
-from typing import Optional, List
+from pydantic import BaseModel, Field, StrictBool, StrictInt, field_serializer, model_validator
+from typing import Optional, List, Literal
 from datetime import datetime
 
 
@@ -68,9 +68,26 @@ class GenerationRequest(BaseModel):
     profile_id: str
     text: str = Field(..., min_length=1, max_length=5000)
     language: str = Field(default="en", pattern="^(zh|en|ja|ko|de|fr|ru|pt|es|it)$")
-    seed: Optional[int] = Field(None, ge=0)
+    seed: Optional[StrictInt] = Field(None, ge=0, lt=2**63)
     instruct: Optional[str] = Field(None, max_length=500)
-    consent_asserted: bool = False
+    consent_asserted: StrictBool = False
+    mode: Literal["prompt_clone", "named_voice", "voice_design"] = "prompt_clone"
+    voice_id: Optional[str] = Field(None, min_length=1, max_length=64)
+    description: Optional[str] = Field(None, min_length=1, max_length=4096)
+
+    @model_validator(mode="after")
+    def validate_mode(self):
+        if self.mode == "prompt_clone":
+            if self.voice_id is not None or self.description is not None:
+                raise ValueError("clone mode does not accept named/design conditioning")
+        elif self.consent_asserted:
+            raise ValueError("sample consent applies only to clone mode")
+        elif self.mode == "named_voice":
+            if self.voice_id is None or not self.voice_id.strip() or self.description is not None:
+                raise ValueError("named voice mode requires only a voice ID")
+        elif self.description is None or not self.description.strip() or self.voice_id is not None:
+            raise ValueError("voice design mode requires only a description")
+        return self
 
 
 class GenerationResponse(BaseModel):

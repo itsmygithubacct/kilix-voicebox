@@ -8,9 +8,11 @@ export const $StoryItemMove = {
         start_time_ms: {
             type: 'number',
             isRequired: true,
+            maximum: 900000,
         },
         track: {
             type: 'number',
+            maximum: 255,
         },
     },
 } as const;

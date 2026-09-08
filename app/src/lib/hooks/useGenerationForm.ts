@@ -8,15 +8,40 @@ import { useGeneration } from '@/lib/hooks/useGeneration';
 import { useGenerationStore } from '@/stores/generationStore';
 import { usePlayerStore } from '@/stores/playerStore';
 
-const generationSchema = z.object({
-  text: z.string().min(1, 'Text is required').max(5000),
-  language: z.enum(LANGUAGE_CODES as [LanguageCode, ...LanguageCode[]]),
-  seed: z.number().int().optional(),
-  instruct: z.string().max(500).optional(),
-  consentAsserted: z.boolean().refine((asserted) => asserted, {
-    message: 'Confirm that you have permission to use this voice sample.',
-  }),
-});
+const generationSchema = z
+  .object({
+    text: z.string().min(1, 'Text is required').max(5000),
+    language: z.enum(LANGUAGE_CODES as [LanguageCode, ...LanguageCode[]]),
+    seed: z.number().int().optional(),
+    instruct: z.string().max(500).optional(),
+    consentAsserted: z.boolean(),
+    mode: z.enum(['prompt_clone', 'named_voice', 'voice_design']),
+    voiceId: z.string().max(64),
+    description: z.string().max(4096),
+  })
+  .superRefine((value, context) => {
+    if (value.mode === 'prompt_clone' && !value.consentAsserted) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['consentAsserted'],
+        message: 'Confirm that you have permission to use this voice sample.',
+      });
+    }
+    if (value.mode === 'named_voice' && !value.voiceId.trim()) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['voiceId'],
+        message: 'Select a built-in voice.',
+      });
+    }
+    if (value.mode === 'voice_design' && !value.description.trim()) {
+      context.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ['description'],
+        message: 'Describe the voice you want to create.',
+      });
+    }
+  });
 
 export type GenerationFormValues = z.infer<typeof generationSchema>;
 
@@ -38,6 +63,9 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
       seed: undefined,
       instruct: '',
       consentAsserted: false,
+      mode: 'prompt_clone',
+      voiceId: 'Vivian',
+      description: '',
       ...options.defaultValues,
     },
   });
@@ -64,7 +92,10 @@ export function useGenerationForm(options: UseGenerationFormOptions = {}) {
         language: data.language,
         seed: data.seed,
         instruct: data.instruct || undefined,
-        consent_asserted: data.consentAsserted,
+        consent_asserted: data.mode === 'prompt_clone' && data.consentAsserted,
+        mode: data.mode,
+        voice_id: data.mode === 'named_voice' ? data.voiceId : undefined,
+        description: data.mode === 'voice_design' ? data.description : undefined,
       });
 
       toast({

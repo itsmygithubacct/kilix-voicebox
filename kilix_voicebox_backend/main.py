@@ -672,21 +672,27 @@ async def generate_speech(
         if not profile:
             raise HTTPException(status_code=404, detail="Profile not found")
         
-        # Resolve one provider input without constructing model-owned prompt tensors.
-        prompt = await profiles.create_voice_prompt_for_profile(
-            data.profile_id,
-            db,
-        )
-        generated = await asyncio.to_thread(
-            _voice_orchestrator().synthesize_clone,
-            profile_id=data.profile_id,
-            sample_path=Path(prompt["audio_path"]),
-            text=data.text,
-            language=data.language,
-            consent_asserted=data.consent_asserted,
-            instruction=data.instruct,
-            seed=data.seed,
-        )
+        if data.mode == "prompt_clone":
+            # Only cloning resolves a consented sample. Named/design modes
+            # retain the profile as a history collection without reading it.
+            prompt = await profiles.create_voice_prompt_for_profile(data.profile_id, db)
+            generated = await asyncio.to_thread(
+                _voice_orchestrator().synthesize_clone,
+                profile_id=data.profile_id,
+                sample_path=Path(prompt["audio_path"]),
+                text=data.text,
+                language=data.language,
+                consent_asserted=data.consent_asserted,
+                instruction=data.instruct,
+                seed=data.seed,
+            )
+        else:
+            generated = await asyncio.to_thread(
+                _voice_orchestrator().synthesize_generated,
+                mode=data.mode, text=data.text, language=data.language,
+                voice_id=data.voice_id, description=data.description,
+                instruction=data.instruct, seed=data.seed,
+            )
         audio_path = config.get_privacy_dir() / "generations" / generated["stored_name"]
         duration = generated["duration_ms"] / 1000
 

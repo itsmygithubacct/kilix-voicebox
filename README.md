@@ -33,8 +33,11 @@ kilix-qwen-tts       kilix-transcribe
   verified against its size, SHA-256, and model identity. They are returned
   directly without adding them to the generation store.
 - Voicebox never imports provider runtimes or performs a second inference path.
-- Synthesis requires an explicit consent assertion bound to the canonical PCM
+- Voice cloning requires an explicit consent assertion bound to the canonical PCM
   digest and original sample-container digest.
+- Built-in voices and voice design use the installed model's supported mode.
+  They require no sample upload and create generation provenance without a
+  sample-consent record. The selected profile groups their history.
 - Consent and generation provenance are written atomically as private `0600`
   records below the Voicebox XDG data directory.
 - API responses expose loopback resource URLs, not private filesystem paths.
@@ -74,8 +77,8 @@ startup variables or user uv configuration.
 
 ## Local API
 
-Voicebox serves the product API on `http://127.0.0.1:17493`. A synthesis request
-must include explicit consent:
+Voicebox serves the product API on `http://127.0.0.1:17493`. A voice-cloning
+request must include explicit consent:
 
 ```bash
 curl -X POST http://127.0.0.1:17493/generate \
@@ -83,6 +86,14 @@ curl -X POST http://127.0.0.1:17493/generate \
   -H "X-Kilix-Voicebox-Session: $KILIX_VOICEBOX_SESSION_TOKEN" \
   -d '{"profile_id":"PROFILE_ID","text":"Hello","language":"en","consent_asserted":true}'
 ```
+
+The same endpoint accepts `mode: "named_voice"` with `voice_id: "Vivian"`, or
+`mode: "voice_design"` with a `description`. These modes require an installed
+CustomVoice or VoiceDesign model respectively, and omit `consent_asserted`.
+Conflicting mode fields are refused before contacting a provider. Named/design
+outputs carry their mode, request digest, engine/model revision, seed and audio
+digest in versioned private provenance; cloned outputs retain their existing
+sample-consent binding.
 
 Generated audio is retrieved by opaque identifier at `/audio/{generation_id}`.
 Provider installation and model selection are content-owned operations and are
