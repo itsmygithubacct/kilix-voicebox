@@ -1,0 +1,446 @@
+{
+  "schema": "kilix.voicebox.sidecar-inputs/v1",
+  "sources": {
+    "transcribe": {
+      "commit": "0c61eb4edcdc75e1aca993ef7c8673b3b9aed6a9",
+      "members": [
+        {
+          "bytes": 1073,
+          "git_blob": "055922bdf19a401e618c98811b85882044a3394a",
+          "git_mode": "100644",
+          "output": "licenses/kilix-transcribe/LICENSE",
+          "output_mode": "0600",
+          "path": "LICENSE",
+          "role": "license",
+          "sha256": "0673817e537c273fead4d9d5407727bc0a5eb9c139f57d0775f599b7732a4522",
+          "source_modes": [
+            "0600",
+            "0644"
+          ],
+          "wheel_path": "kilix_transcribe-0.1.0.dist-info/licenses/LICENSE"
+        },
+        {
+          "bytes": 1210,
+          "git_blob": "d6775b1c906eba1f149c37a6f00c5f4eeeb403d6",
+          "git_mode": "100644",
+          "output": "python/kilix_transcribe/__init__.py",
+          "output_mode": "0600",
+          "path": "src/kilix_transcribe/__init__.py",
+          "role": "module",
+          "sha256": "d27f32833d0bb4a4bddacfd6f45e14ecc9f401b6f863e2c370509a73cf1a509d",
+          "source_modes": [
+            "0600",
+            "0644"
+          ],
+          "wheel_path": "kilix_transcribe/__init__.py"
+        },
+        {
+          "bytes": 5997,
+          "git_blob": "a5cb8b96cad0223b8d97e277a22267c9bc53df7e",
+          "git_mode": "100644",
+          "output": "python/kilix_transcribe/owned.py",
+          "output_mode": "0600",
+          "path": "src/kilix_transcribe/owned.py",
+          "role": "module",
+          "sha256": "bb26c00438fd5fb9782d3057b0c06ef6a1a32de1043873668e3c648c1f1f5f27",
+          "source_modes": [
+            "0600",
+            "0644"
+          ],
+          "wheel_path": "kilix_transcribe/owned.py"
+        },
+        {
+          "bytes": 20763,
+          "git_blob": "25d2540dbd5f362e24ad13a31dcd54e08e3d86d2",
+          "git_mode": "100644",
+          "output": "python/kilix_transcribe/protocol.py",
+          "output_mode": "0600",
+          "path": "src/kilix_transcribe/protocol.py",
+          "role": "module",
+          "sha256": "9995c003b13ac43babb618eb98d5b5941482eb7e936e23bb4fda7a1827ad9f06",
+          "source_modes": [
+            "0600",
+            "0644"
+          ],
+          "wheel_path": "kilix_transcribe/protocol.py"
+        },
+        {
+          "bytes": 4136,
+          "git_blob": "418720b7dd21645e7e42d2256546703bb3025864",
+          "git_mode": "100644",
+          "output": "python/kilix_transcribe/results.py",
+          "output_mode": "0600",
+          "path": "src/kilix_transcribe/results.py",
+          "role": "module",
+          "sha256": "af175b48744147918b6a7a4d9319a00e9b46987a31ce6757de565e5335ee080e",
+          "source_modes": [
+            "0600",
+            "0644"
+          ],
+          "wheel_path": "kilix_transcribe/results.py"
+        },
+        {
+          "bytes": 15247,
+          "git_blob": "42d632611e2a90820cbda8558d1b720f923917b6",
+          "git_mode": "100644",
+          "output": "python/kilix_transcribe/runtime.py",
+          "output_mode": "0600",
+          "path": "src/kilix_transcribe/runtime.py",
+          "role": "module",
+          "sha256": "bb99f181e3800da845b24e9897d98f9f0daedd1cc8277118697384b7306f32d7",
+          "source_modes": [
+            "0600",
+            "0644"
+          ],
+          "wheel_path": "kilix_transcribe/runtime.py"
+        },
+        {
+          "bytes": 20530,
+          "git_blob": "edcf1b042d8b339bf7f6efb47330d845357b1570",
+          "git_mode": "100644",
+          "output": "python/kilix_transcribe/service.py",
+          "output_mode": "0600",
+          "path": "src/kilix_transcribe/service.py",
+          "role": "module",
+          "sha256": "daab44c4449f7e70ce096431a92316c90820d3b6084ef1e914c2d774838a122d",
+          "source_modes": [
+            "0600",
+            "0644"
+          ],
+          "wheel_path": "kilix_transcribe/service.py"
+        },
+        {
+          "bytes": 18347,
+          "git_blob": "647ad7935499e359a2d7a7b1eee4fd5a3addca9b",
+          "git_mode": "100644",
+          "output": "python/kilix_transcribe/surface.py",
+          "output_mode": "0600",
+          "path": "src/kilix_transcribe/surface.py",
+          "role": "module",
+          "sha256": "89caba238c3d30697c8c93b35f04bd877d496a43c1b0c2d24b892817cfddc563",
+          "source_modes": [
+            "0600",
+            "0644"
+          ],
+          "wheel_path": "kilix_transcribe/surface.py"
+        }
+      ],
+      "notices": [
+        "LICENSE"
+      ],
+      "repository": "kilix-transcribe",
+      "tree": "d0d4d89d6bc70341c49942a16bfb2691d47b8c85"
+    },
+    "voice": {
+      "commit": "228ac7ae5b1ceb6b8065f3bc1342f90bbc740345",
+      "members": [
+        {
+          "bytes": 35149,
+          "git_blob": "f288702d2fa16d3cdf0035b15a9fcbc552cd88e7",
+          "git_mode": "100644",
+          "output": "licenses/kilix-voice/LICENSE",
+          "output_mode": "0600",
+          "path": "LICENSE",
+          "role": "license",
+          "sha256": "3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986",
+          "source_modes": [
+            "0600",
+            "0644"
+          ]
+        },
+        {
+          "bytes": 6,
+          "git_blob": "b1e80bb2480a6db3c4b252661ac61ed945409b32",
+          "git_mode": "100644",
+          "output": "python/VERSION",
+          "output_mode": "0600",
+          "path": "VERSION",
+          "role": "version",
+          "sha256": "2d2454ef0edeb462a6ce8b25d387aaa74df08093d5cea0428a10ce55510c6326",
+          "source_modes": [
+            "0600",
+            "0644"
+          ]
+        },
+        {
+          "bytes": 872,
+          "git_blob": "201b1d746da697d9a057b4c74fb0dfeb6c38f6ea",
+          "git_mode": "100644",
+          "output": "python/voicelib/__init__.py",
+          "output_mode": "0600",
+          "path": "voicelib/__init__.py",
+          "role": "module",
+          "sha256": "115dd049fd5cde4a79232804ab6136c5b38e4c64b2637f9167a5fe3a0d41a02d",
+          "source_modes": [
+            "0600",
+            "0644"
+          ]
+        },
+        {
+          "bytes": 23568,
+          "git_blob": "128371f0c0eafb023e0e9646ea83e57268b8c3b3",
+          "git_mode": "100644",
+          "output": "python/voicelib/audio.py",
+          "output_mode": "0600",
+          "path": "voicelib/audio.py",
+          "role": "module",
+          "sha256": "2700c7357fe3ae6b77fb0438927e0c7cf4dd1f052e6d64d390bdfa7bdf41b205",
+          "source_modes": [
+            "0600",
+            "0644"
+          ]
+        },
+        {
+          "bytes": 25929,
+          "git_blob": "cbea4a9b7349ac9cd1199d5036630808301a52ae",
+          "git_mode": "100644",
+          "output": "python/voicelib/device_leases.py",
+          "output_mode": "0600",
+          "path": "voicelib/device_leases.py",
+          "role": "module",
+          "sha256": "382ea1de20dbf4eda21c92a529ecd95f04451a8224fb4b20b0315d17918b0ccc",
+          "source_modes": [
+            "0600",
+            "0644"
+          ]
+        },
+        {
+          "bytes": 14371,
+          "git_blob": "55da703d190efcadd1b437229df6b2a9f8489840",
+          "git_mode": "100644",
+          "output": "python/voicelib/microphone.py",
+          "output_mode": "0600",
+          "path": "voicelib/microphone.py",
+          "role": "module",
+          "sha256": "f346e5d57af1d76e7a6fe35b2242997004b376d246b6446de417f1a2e2d3ee3d",
+          "source_modes": [
+            "0600",
+            "0644"
+          ]
+        },
+        {
+          "bytes": 4013,
+          "git_blob": "7b05138923581e77f9b4748cff26eef1f8e66722",
+          "git_mode": "100644",
+          "output": "python/voicelib/microphone_supervisor.py",
+          "output_mode": "0600",
+          "path": "voicelib/microphone_supervisor.py",
+          "role": "helper",
+          "sha256": "5c7be60f8cf6cef2677faeda9ef6cab6a07fe2a67790d8173808a09da4c945bb",
+          "source_modes": [
+            "0600",
+            "0644"
+          ]
+        },
+        {
+          "bytes": 2644,
+          "git_blob": "80e57a6f342b848ae2cdc37c93324a0647a72e54",
+          "git_mode": "100644",
+          "output": "python/voicelib/models.py",
+          "output_mode": "0600",
+          "path": "voicelib/models.py",
+          "role": "module",
+          "sha256": "a7233cc74a4851afb72e4962893018875696ba6ae2e677d33093dff96ac9bef1",
+          "source_modes": [
+            "0600",
+            "0644"
+          ]
+        },
+        {
+          "bytes": 6785,
+          "git_blob": "91897c9abc3fd663121fa706e0ed124fee7e85bd",
+          "git_mode": "100644",
+          "output": "python/voicelib/paths.py",
+          "output_mode": "0600",
+          "path": "voicelib/paths.py",
+          "role": "module",
+          "sha256": "26626c59be32d3aec6908f0c468d773c3f58a511ab8988fefa0829b66e5ca913",
+          "source_modes": [
+            "0600",
+            "0644"
+          ]
+        },
+        {
+          "bytes": 13935,
+          "git_blob": "03b4a08bd868d8f908a56340c362622a57b42944",
+          "git_mode": "100644",
+          "output": "python/voicelib/settings.py",
+          "output_mode": "0600",
+          "path": "voicelib/settings.py",
+          "role": "module",
+          "sha256": "a89d768a603ff6f3e4034b57dbc15a3e52f81b8cdd42c48e1fc920c55eaadb67",
+          "source_modes": [
+            "0600",
+            "0644"
+          ]
+        },
+        {
+          "bytes": 5566,
+          "git_blob": "4dadb27360b3189397c904504271d628881f4d25",
+          "git_mode": "100644",
+          "output": "python/voicelib/util.py",
+          "output_mode": "0600",
+          "path": "voicelib/util.py",
+          "role": "module",
+          "sha256": "7dbcba079daafbcc261f589d0589f3d0e7437c62da6a9dde75bcb3b8b5c31d88",
+          "source_modes": [
+            "0600",
+            "0644"
+          ]
+        }
+      ],
+      "notices": [
+        "LICENSE"
+      ],
+      "repository": "kilix-voice",
+      "tree": "99b31ec992eb5b78ae0df868d82b1563b9e43c65"
+    }
+  },
+  "wheel": {
+    "bytes": 46454,
+    "filename": "kilix_transcribe-0.1.0-py3-none-any.whl",
+    "members": [
+      {
+        "bytes": 1210,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe/__init__.py",
+        "sha256": "d27f32833d0bb4a4bddacfd6f45e14ecc9f401b6f863e2c370509a73cf1a509d"
+      },
+      {
+        "bytes": 49,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe/__main__.py",
+        "sha256": "0f7d54f3fbb1f79a85eb8110f11793db99da6f3c61ee979de5abe9a1b5f3fdb3"
+      },
+      {
+        "bytes": 8063,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe/cli.py",
+        "sha256": "cfc20ba80fda52d7c187523bf0b7b1f88b38c2e20d074185610644af9bce052d"
+      },
+      {
+        "bytes": 7026,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe/content.py",
+        "sha256": "9b6a2a13eeb21ca27605b5e700bdbd125915351758c7c505a15b476de8a49bc8"
+      },
+      {
+        "bytes": 3293,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe/output.py",
+        "sha256": "7a97d97cceb8e7b8f3bf7daa427e81778ec27dedfdaeecb506ccbafb81257f43"
+      },
+      {
+        "bytes": 5997,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe/owned.py",
+        "sha256": "bb26c00438fd5fb9782d3057b0c06ef6a1a32de1043873668e3c648c1f1f5f27"
+      },
+      {
+        "bytes": 20763,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe/protocol.py",
+        "sha256": "9995c003b13ac43babb618eb98d5b5941482eb7e936e23bb4fda7a1827ad9f06"
+      },
+      {
+        "bytes": 10418,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe/recording.py",
+        "sha256": "fba1202619ba54cf72855adaee1b02c74d46305bcabe4c2ff445754845ff9ab8"
+      },
+      {
+        "bytes": 4136,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe/results.py",
+        "sha256": "af175b48744147918b6a7a4d9319a00e9b46987a31ce6757de565e5335ee080e"
+      },
+      {
+        "bytes": 15247,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe/runtime.py",
+        "sha256": "bb99f181e3800da845b24e9897d98f9f0daedd1cc8277118697384b7306f32d7"
+      },
+      {
+        "bytes": 20530,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe/service.py",
+        "sha256": "daab44c4449f7e70ce096431a92316c90820d3b6084ef1e914c2d774838a122d"
+      },
+      {
+        "bytes": 3880,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe/supervisor.py",
+        "sha256": "4cb1c7fed9d2a04dd9ea16c5ac544abf790162a0118a62b0399971a60d10a6f0"
+      },
+      {
+        "bytes": 18347,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe/surface.py",
+        "sha256": "89caba238c3d30697c8c93b35f04bd877d496a43c1b0c2d24b892817cfddc563"
+      },
+      {
+        "bytes": 5995,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe/worker.py",
+        "sha256": "950ed028b70fd941c360e823a87827d4becbace7def1ca88a7d30777a7474393"
+      },
+      {
+        "bytes": 1073,
+        "compression": 8,
+        "mode": "0o100644",
+        "path": "kilix_transcribe-0.1.0.dist-info/licenses/LICENSE",
+        "sha256": "0673817e537c273fead4d9d5407727bc0a5eb9c139f57d0775f599b7732a4522"
+      },
+      {
+        "bytes": 12644,
+        "compression": 8,
+        "mode": "0o100644",
+        "path": "kilix_transcribe-0.1.0.dist-info/METADATA",
+        "sha256": "e9b29fda09bb93328790cdbeedfd6cf4dcce9f25a453ca7949528b1cc4173704"
+      },
+      {
+        "bytes": 91,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe-0.1.0.dist-info/WHEEL",
+        "sha256": "0a6c85234931e5c7443132e238d4116c64308c8a11d5a21807b782010e0a3c9d"
+      },
+      {
+        "bytes": 63,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe-0.1.0.dist-info/entry_points.txt",
+        "sha256": "90a23108093cc8a37aebc425324779b91e3806947b9d0a3af34b9a16efe065a4"
+      },
+      {
+        "bytes": 17,
+        "compression": 8,
+        "mode": "0o100600",
+        "path": "kilix_transcribe-0.1.0.dist-info/top_level.txt",
+        "sha256": "078f1808ce479db92e97c5f986be2898b0ea0df64ff676c5ead2660c57c49d7a"
+      },
+      {
+        "bytes": 1724,
+        "compression": 8,
+        "mode": "0o100664",
+        "path": "kilix_transcribe-0.1.0.dist-info/RECORD",
+        "sha256": "d7de3c5566d435280a917c65f441e11efddf1582eaca42cbfc1aa2c019f7ba64"
+      }
+    ],
+    "sha256": "5d6ffab4c5237a45107eff9a23a177ae23759018e3cea60c19f7509bc592f2fb"
+  }
+}
