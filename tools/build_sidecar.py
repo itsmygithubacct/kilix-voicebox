@@ -30,6 +30,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import sidecar_authority as authority  # noqa: E402
 from verify_sidecar_provenance import BRIDGE  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -155,6 +156,13 @@ def run_build(options):
         raise Refused('the produced sidecar did not verify; its stage is retained at '
                       + str(stage) + ' and no resource set is publishable')
 
+    # Carried for the packaging capability: the identities this invocation
+    # actually verified, and a private location outside the checkout to mint it
+    # in. Recorded rather than rediscovered, so the capability cannot be bound
+    # to anything this build did not just prove.
+    options.verified = {'build_id': build_id, 'source_commit': commit,
+                        'source_tree': tree, 'stage_root': stage_root}
+
     # Only a complete, verified build cleans up after itself.
     shutil.rmtree(stage, ignore_errors=False)
     shutil.rmtree(private_home, ignore_errors=False)
@@ -163,8 +171,39 @@ def run_build(options):
     return build_id
 
 
+RESOURCE_RECEIPT = ROOT / 'tauri/src-tauri/resources/sidecar/RESOURCES.json'
+
+
+def issue_packaging_authority(options, build_id):
+    """Mint the single-use capability for this invocation's packaging child."""
+    verified = getattr(options, 'verified', None)
+    if not verified or verified.get('build_id') != build_id:
+        raise authority.AuthorityError(
+            'this invocation did not record a verified build to authorize')
+    try:
+        receipt = json.loads(RESOURCE_RECEIPT.read_text(encoding='utf-8'))
+        resources = receipt['resources']
+    except (OSError, ValueError, KeyError) as error:
+        raise authority.AuthorityError(
+            'the resource receipt could not be read to bind the capability: %s' % error)
+    if not isinstance(resources, list):
+        raise authority.AuthorityError('the resource receipt resource list is malformed')
+    return authority.issue(
+        verified['stage_root'] / ('authority-' + build_id),
+        build_id=build_id,
+        source_commit=verified['source_commit'],
+        source_tree=verified['source_tree'],
+        platform=options.platform,
+        binary=options.binary_for(build_id),
+        provenance=options.provenance_for(build_id),
+        receipt=RESOURCE_RECEIPT,
+        resources=resources,
+        root=ROOT)
+
+
 class Options(argparse.Namespace):
     platform = None
+    verified = None
 
     def binary_for(self, _build_id):
         return ROOT / 'tauri/src-tauri/binaries' / ('voicebox-server-' + self.platform)
@@ -184,11 +223,20 @@ def main(argv=None):
     parser.add_argument('--package', default=None,
                         help='shell command to run once the gate has passed')
     options = parser.parse_args(argv, namespace=Options())
+    capability = None
     try:
         build_id = run_build(options)
         if options.package:
-            environment = dict(os.environ, VOICEBOX_SIDECAR_GATE_PASSED=build_id,
+            # The packaging child is authorized by a single-use capability this
+            # live invocation mints, held outside the checkout and revoked as
+            # soon as packaging ends. An inherited id or boolean is no longer
+            # authority for anything: a stale environment now reaches a gate
+            # that has nothing to consume.
+            capability = issue_packaging_authority(options, build_id)
+            environment = dict(os.environ,
                                VOICEBOX_SIDECAR_PLATFORM=options.platform)
+            environment.pop('VOICEBOX_SIDECAR_GATE_PASSED', None)
+            environment[authority.VARIABLE] = str(capability)
             packaged = subprocess.run(options.package, shell=True, cwd=ROOT, env=environment,
                                       check=False)
             if packaged.returncode:
@@ -202,6 +250,22 @@ def main(argv=None):
     except Refused as error:
         print('voicebox: the sidecar build refuses: ' + str(error), file=sys.stderr)
         return 2
+    except authority.AuthorityError as error:
+        print('voicebox: the sidecar build refuses: could not mint a packaging '
+              'authority: ' + str(error), file=sys.stderr)
+        return 2
+    finally:
+        # Completion, refusal, cancellation and interruption all end the
+        # capability's life. Nothing survives this invocation to authorize a
+        # later package build.
+        if capability is not None:
+            authority.revoke(capability)
+            directory = Path(capability).parent
+            try:
+                if not any(directory.iterdir()):
+                    directory.rmdir()
+            except OSError:
+                pass
     return 0
 
 

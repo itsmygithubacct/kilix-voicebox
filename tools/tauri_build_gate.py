@@ -33,6 +33,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
+import sidecar_authority as authority  # noqa: E402
 from prepare_sidecar_resources import main as prepare_main  # noqa: E402
 from verify_sidecar_provenance import BRIDGE  # noqa: E402
 
@@ -41,6 +42,20 @@ ROOT = Path(__file__).resolve().parent.parent
 BINARIES = ROOT / 'tauri/src-tauri/binaries'
 REQUIRED = ('VOICEBOX_SIDECAR_SOURCE_COMMIT', 'VOICEBOX_SIDECAR_SOURCE_TREE',
             'VOICEBOX_SIDECAR_STAGED_INPUTS', 'VOICEBOX_SIDECAR_PLATFORM')
+
+
+def current_source_identity():
+    """This checkout's clean commit and tree, or (None, None) if unreadable."""
+    try:
+        commit = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD'],
+                                capture_output=True, text=True, check=False)
+        tree = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD^{tree}'],
+                              capture_output=True, text=True, check=False)
+    except OSError:
+        return None, None
+    if commit.returncode or tree.returncode:
+        return None, None
+    return commit.stdout.strip(), tree.stdout.strip()
 
 
 def refuse(message, status):
@@ -57,23 +72,28 @@ def main(argv=None):
     options = parser.parse_args(argv)
 
     # tools/build_sidecar.py runs the producer once and then the consumer, and
-    # marks the build it just verified. The receipt beside the published
-    # resources must name that same invocation, so this is a check of work
-    # already done rather than a discovered file being trusted, and the
-    # producer is not invoked a second time for the same package build.
-    passed = os.environ.get('VOICEBOX_SIDECAR_GATE_PASSED')
-    if passed:
-        receipt = ROOT / 'tauri/src-tauri/resources/sidecar/RESOURCES.json'
-        if receipt.is_symlink() or not receipt.is_file():
-            return refuse('the gate was reported as passed but no resource receipt exists', 2)
+    # then mints a single-use capability for the packaging child it launches.
+    # That capability -- not an inherited string, and not the build id the tree
+    # publishes about itself -- is the authority here, and it is only accepted
+    # while the invocation that minted it is still running. The producer is
+    # still not invoked a second time for the same package build.
+    capability = os.environ.get(authority.VARIABLE)
+    if capability:
+        commit, tree = current_source_identity()
+        if commit is None:
+            return refuse('the current source commit and tree could not be read; '
+                          'a packaging capability cannot be bound to this build', 2)
+        if not options.platform:
+            return refuse('a packaging capability was supplied without '
+                          'VOICEBOX_SIDECAR_PLATFORM naming the installed sidecar', 2)
         try:
-            recorded = json.loads(receipt.read_text(encoding='utf-8'))['build_id']
-        except (OSError, ValueError, KeyError):
-            return refuse('the resource receipt is unreadable', 2)
-        if recorded != passed:
-            return refuse('the resource receipt names build %s, not this build %s'
-                          % (recorded, passed), 2)
-        print('voicebox: sidecar gate already passed for build ' + passed)
+            record = authority.consume(capability, root=ROOT, source_commit=commit,
+                                       source_tree=tree, platform=options.platform)
+            authority.verify_artifacts(record)
+        except authority.AuthorityError as error:
+            return refuse('the packaging authority is not usable: ' + str(error), 2)
+        print('voicebox: sidecar gate honoured a live capability for build '
+              + record['build_id'])
         return 0
 
     # A standalone Tauri release build reaches the same safe path: it runs the
@@ -82,7 +102,12 @@ def main(argv=None):
     orchestrator = [sys.executable, '-I', str(ROOT / 'tools/build_sidecar.py')]
     if options.platform:
         orchestrator += ['--platform', options.platform]
-    status = subprocess.run(orchestrator, cwd=ROOT, check=False).returncode
+    # Nothing about a spent or foreign capability may leak into the build the
+    # gate is about to start.
+    environment = dict(os.environ)
+    environment.pop(authority.VARIABLE, None)
+    status = subprocess.run(orchestrator, cwd=ROOT, check=False,
+                            env=environment).returncode
     if status:
         return refuse('the standalone sidecar build did not complete', status)
     print('voicebox: sidecar gate passed; resources prepared for packaging')
