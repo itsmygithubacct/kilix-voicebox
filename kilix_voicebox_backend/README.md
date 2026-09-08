@@ -59,4 +59,8 @@ The frozen sidecar build is:
 ```
 
 It emits a binary and a sidecar provenance manifest without bundling any speech
-runtime.
+runtime. `build_binary.py` writes both into a fresh per-run staging directory it
+creates itself, then writes a handoff naming and hashing exactly those two
+files; `scripts/build-server.sh` installs only what that handoff names and
+verifies it belongs to the run it started. Running `build_binary.py` directly
+requires `--stage-dir` naming a directory that does not yet exist.

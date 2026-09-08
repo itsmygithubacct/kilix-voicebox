@@ -485,19 +485,55 @@ class CuratedImportTests(unittest.TestCase):
             )
             rustc.chmod(0o755)
 
+            # The stand-in producer takes its output location from the
+            # arguments the build script passed it, and writes the handoff that
+            # script collects from. A stub that wrote to a path of its own
+            # choosing would prove the environment filter while concealing the
+            # producer/consumer contract, which is how the real output-path
+            # mismatch survived this control.
             uv = tools / "uv"
             uv.write_text(
-                "#!/bin/sh\n"
-                "set -eu\n"
-                "test \"${PYTHONNOUSERSITE-}\" = 1\n"
-                "test \"${PYTHONSAFEPATH-}\" = 1\n"
-                "python3 -c 'from pathlib import Path; "
-                "root = Path.cwd(); "
-                "dist = root / \"backend\" / \"dist\"; "
-                "dist.mkdir(parents=True); "
-                "(dist / \"voicebox-server\").write_bytes(b\"sidecar\"); "
-                "(dist / \"voicebox-server.provenance.json\").write_text("
-                "\"{}\\n\", encoding=\"utf-8\")'\n",
+                """#!/bin/sh
+set -eu
+test "${PYTHONNOUSERSITE-}" = 1
+test "${PYTHONSAFEPATH-}" = 1
+stage=
+build_id=
+while [ $# -gt 0 ]; do
+    case "$1" in
+        --stage-dir) stage=$2; shift 2 ;;
+        --build-id) build_id=$2; shift 2 ;;
+        *) shift ;;
+    esac
+done
+test -n "$stage"
+test -n "$build_id"
+test ! -e "$stage"
+python3 - "$stage" "$build_id" <<'PRODUCER'
+import hashlib
+import sys
+from pathlib import Path
+
+stage = Path(sys.argv[1])
+build_id = sys.argv[2]
+dist = stage / "dist"
+dist.mkdir(parents=True)
+binary = dist / "voicebox-server"
+binary.write_bytes(b"sidecar")
+provenance = dist / "voicebox-server.provenance.json"
+provenance.write_text("{}\\n", encoding="utf-8")
+(stage / "sidecar-outputs").write_text(
+    "schema=kilix.voicebox.sidecar-output/candidate-v1\\n"
+    f"build_id={build_id}\\n"
+    "binary=dist/voicebox-server\\n"
+    f"binary_sha256={hashlib.sha256(binary.read_bytes()).hexdigest()}\\n"
+    f"binary_bytes={binary.stat().st_size}\\n"
+    "provenance=dist/voicebox-server.provenance.json\\n"
+    f"provenance_sha256={hashlib.sha256(provenance.read_bytes()).hexdigest()}\\n",
+    encoding="ascii",
+)
+PRODUCER
+""",
                 encoding="utf-8",
             )
             uv.chmod(0o755)
@@ -526,6 +562,14 @@ class CuratedImportTests(unittest.TestCase):
             self.assertEqual(
                 copied.with_suffix(".provenance.json").read_text(encoding="utf-8"),
                 "{}\n",
+            )
+            # The collected bytes came from the staging directory the script
+            # named for this invocation and nowhere else: the pre-rename
+            # `backend/dist` path is never created, and the staging directory
+            # does not survive the build that owned it.
+            self.assertFalse((root / "backend").exists())
+            self.assertEqual(
+                sorted((root / "kilix_voicebox_backend" / "build").iterdir()), []
             )
 
     def test_repository_shape_refuses_hidden_index_paths(self) -> None:
