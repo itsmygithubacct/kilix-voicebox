@@ -1,5 +1,5 @@
 {
-  "schema": "kilix.voicebox.sidecar-inputs/v1",
+  "schema": "kilix.voicebox.sidecar-inputs/v2",
   "sources": {
     "transcribe": {
       "commit": "0c61eb4edcdc75e1aca993ef7c8673b3b9aed6a9",
@@ -33,6 +33,21 @@
             "0644"
           ],
           "wheel_path": "kilix_transcribe/__init__.py"
+        },
+        {
+          "bytes": 3293,
+          "git_blob": "5bbbc44430316438ec72615d40c137f4e907e6e2",
+          "git_mode": "100644",
+          "output": "python/kilix_transcribe/output.py",
+          "output_mode": "0600",
+          "path": "src/kilix_transcribe/output.py",
+          "role": "module",
+          "sha256": "7a97d97cceb8e7b8f3bf7daa427e81778ec27dedfdaeecb506ccbafb81257f43",
+          "source_modes": [
+            "0600",
+            "0644"
+          ],
+          "wheel_path": "kilix_transcribe/output.py"
         },
         {
           "bytes": 5997,

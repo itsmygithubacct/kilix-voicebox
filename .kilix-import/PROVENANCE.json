@@ -1,6 +1,24 @@
 {
   "schema": "kilix.voicebox.curated-import/v1",
   "status": "F104CONT2_IMPORT_HYGIENE_PROOF_CANDIDATE_NOT_P8",
+  "current_controls": {
+    "schema": "kilix.voicebox.current-controls/v1",
+    "historical_import_commit": "08e763fa8f734fe519b14cf6e9810404a7aa2617",
+    "additional": [
+      {
+        "path": ".kilix-import/sidecar-inputs.json",
+        "git_mode": "100644",
+        "bytes": 15330,
+        "sha256": "fa26ea1c27217be6f9eb4509bd84e3c0b8f4c02a95913d5cd2cadd0c352b59d2"
+      },
+      {
+        "path": ".kilix-import/test_sidecar_inputs.py",
+        "git_mode": "100644",
+        "bytes": 19750,
+        "sha256": "f08846535125e96500d19b7615cf62c1fd3ae607bf352a88049e54d3fa34177b"
+      }
+    ]
+  },
   "upstream": {
     "url": "https://github.com/jamiepine/voicebox.git",
     "commit": "eb2cd861b19baa16720fd31747071c187c054bc5",

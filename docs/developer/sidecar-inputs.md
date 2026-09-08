@@ -5,7 +5,12 @@ component. It validates explicit local software inputs and writes a private
 projection for later sidecar integration. It does not import those inputs,
 install packages, resolve dependencies, launch providers or build a sidecar.
 
-The adjacent `.kilix-import/sidecar-inputs.json` is bound by SHA256 in the tool.
+The adjacent `.kilix-import/sidecar-inputs.json` uses schema
+`kilix.voicebox.sidecar-inputs/v2` and is bound by SHA256 in the tool.
+Completion uses `kilix.voicebox.sidecar-stage/v2`; old manifest/completion
+identities refuse. The only added payload is the unchanged transcribe output.py
+needed by its package initializer. Source commits, whole wheel, existing payloads
+and four plaintext resources remain unchanged.
 There is no alternate-manifest or source-override switch. It selects:
 
 | Input | Exact identity |
@@ -47,23 +52,23 @@ owned, single-link regular source file may be 0600 or 0644; observed modes
 are recorded. Executable, shared-writable, special and linked inputs refuse.
 The whole wheel digest and all 20 members' names, bytes, exact Unix modes,
 compression and RECORD identities are checked without extraction. Only the
-selected eight wheel members are compared with their source counterparts;
+selected nine wheel members are compared with their source counterparts;
 unused wheel code and metadata are validated but never staged or executed.
 The complete tracked LICENSE/LICENCE/NOTICE/COPYING population of each selected
 commit is enumerated: these two revisions each contain one root LICENSE.
 
-The output has exactly 19 payload files and one `completion.json`:
+The output has exactly 20 payload files and one `completion.json`:
 
 | Location | Population |
 | --- | --- |
 | `python/voicelib/` | Eight importable modules: `__init__`, `audio`, `microphone`, `settings`, `util`, `models`, `paths`, `device_leases` |
-| `python/kilix_transcribe/` | Seven importable modules: `__init__`, `service`, `protocol`, `runtime`, `results`, `surface`, `owned` |
+| `python/kilix_transcribe/` | Eight importable modules: `__init__`, `output`, `service`, `protocol`, `runtime`, `results`, `surface`, `owned` |
 | `python/voicelib/microphone_supervisor.py` | The unchanged plaintext helper, beside `microphone.py` |
 | `python/VERSION` | The actual selected Voice version file |
 | `licenses/kilix-voice/LICENSE` | Complete selected Voice license bytes |
 | `licenses/kilix-transcribe/LICENSE` | Complete selected transcribe license bytes, also verified against the wheel |
 
-There are 15 importable projection modules plus the separate helper: 16
+There are 16 importable projection modules plus the separate helper: 17
 Python files physically present. The helper must remain a real plaintext
 file at that relative location in the eventual extracted sidecar layout.
 The unchanged microphone code invokes it with `/usr/bin/python3 -I -B -S`.
@@ -113,13 +118,53 @@ the production CLI/API, exact population, notice/helper refusal, archive
 structure, source/wheel substitution, poisoned environment, output refusal,
 interruption and mutation during staging. Test process fixtures are synthetic.
 
-Remaining integration includes the sidecar output-path correction (G1),
-PyInstaller/tool/dependency closure and consumption of this manifest (G2/G3),
-shipping the helper/VERSION/licenses and extending final binary provenance
-(G3), catalog and host installation/provider staging (G4), and the exact
-private provider interpreter/dependency environment plus OS installation (G5).
-The original curated-import gate also fixes its control population at four
-files: these two assigned new `.kilix-import` files require a separately
-reviewed integration update to that gate. This component leaves its existing
-assertions unchanged. No model, physical capture, built-sidecar, media,
-upgrade or release qualification follows from a successful stage.
+The production builder consumes this stage with explicit arguments:
+
+```sh
+"$pinned_python_home/bin/python3.12" -I -B -S \
+  kilix_voicebox_backend/build_binary.py \
+  --stage-dir "$fresh_build_directory" --build-id "$invocation_id" \
+  --voice-source "$voice_source" --transcribe-source "$transcribe_source" \
+  --transcribe-wheel "$transcribe_wheel" \
+  --wheelhouse "$original_locked_software_wheels" \
+  --python-home "$pinned_python_home"
+```
+
+All inputs must be explicit absolute local paths. The fresh build directory
+must be outside the clean product checkout and below existing nonsymbolic
+directories. The wheel directory contains exactly one original archive for
+each selected Linux x86_64 CPython3.12 runtime/build-group distribution in the
+unchanged lock. Whole archive hashes/sizes and complete RECORD populations
+are checked before staging. There is no acquisition, cache fallback or version
+substitution. CPython3.12.8 and PyInstaller6.15.0 remain fixed.
+
+The producer binds clean raw Git source, all20 selected payloads, the complete
+selected interpreter/package/tool population and original wheel archives.
+A sealed memory file carries that population into a private namespace with
+network isolation. Package code executes only after the selected files are
+mounted read-only; separate writable output has a1GiB limit and the original
+240-second build deadline includes preparation. The caller must also enforce
+the documented external memory/process/CPU/time limits. Original inputs and
+the staged projection are checked before and after execution; periodic checks
+detect identity changes during execution. Immutable consumed bytes remain
+protected even when filesystem timestamp granularity hides a transient change.
+
+Actual PyInstaller output is inspected with the selected archive reader:
+16 extracted code objects are compared to compiled selected sources, and the
+four plaintext helper/VERSION/notice files are compared byte for byte. The
+complete extractable archive population is bound. The v3 provenance schema,
+strict metadata policy and consumer obligations are fixed in
+[the build contract](sidecar-build-contract.md). The separate output-handoff
+schema stays v1 and is published last; failures retain their private stage
+without a successful handoff. The private original-wheel receipt distinguishes
+archive hashes from the complete installed-member identities in provenance.
+
+The current import gate explicitly selects the two C19 control files with
+fixed paths, modes, sizes and digests. Its historical four-file import record
+and source provenance remain unchanged; no additional control is accepted by
+enumeration. Missing, extra or changed current selections refuse.
+
+Collector invocation forwarding, Tauri resources, catalog/provider staging,
+the private provider runtime and OS installation remain separate integration
+gates. Successful staging or building does not qualify models, physical
+capture, provider delivery, media, upgrade or release behavior.

@@ -56,7 +56,7 @@ def snapshot_row(path, data, mode='0600'):
 
 
 class Fixture:
-    """A compliant candidate-v2 record built from the real input manifest."""
+    """A compliant candidate-v3 record built from the real input manifest."""
 
     def __init__(self):
         self.manifest_bytes = MANIFEST.read_bytes()
@@ -75,7 +75,7 @@ class Fixture:
         modes = {key + '/' + member['path']: member['output_mode']
                  for key, spec in manifest['sources'].items() for member in spec['members']}
         completion = {
-            'schema': 'kilix.voicebox.sidecar-stage/v1',
+            'schema': 'kilix.voicebox.sidecar-stage/v2',
             'input_manifest_sha256': sha(self.manifest_bytes),
             'sources': {key: {k: spec[k] for k in ('repository', 'commit', 'tree')}
                         for key, spec in manifest['sources'].items()},
@@ -104,6 +104,25 @@ class Fixture:
             snapshot_row('python/lib/python3.12/os.py', b'standard library'),
             snapshot_row('source/kilix_voicebox_backend/server.py', b'product source'),
         ]
+        # Shaped records only: no installed distribution or archive is observed.
+        # Retain the original first-row duplicate-member sentinel verbatim so
+        # all original test methods/assertions remain unchanged. It is an
+        # arbitrary fixture member owned by the first normalized row, not an
+        # assertion that alembic ships a pyinstaller file.
+        distributions = []
+        for index, (name, version) in enumerate(verify.LOCKED_DISTRIBUTIONS):
+            code_path = 'env/' + name + '/module.py'
+            record_path = 'env/' + name + '-' + version + '.dist-info/RECORD'
+            record_data = b'record bytes' if name == 'pyinstaller' else (name + ' record').encode()
+            snapshot_files.append(snapshot_row(code_path, (name + ' controlled module').encode()))
+            if name != 'pyinstaller':
+                snapshot_files.append(snapshot_row(record_path, record_data))
+            members = [code_path, record_path]
+            if index == 0:
+                members.append('env/pyinstaller/__init__.py')
+            distributions.append({'name': name, 'version': version,
+                                  'record_sha256': sha(record_data),
+                                  'members': sorted(members)})
         snapshot_files.sort(key=lambda row: row['path'])
         modules = sorted(
             ({'name': verify.module_name(row['path']),
@@ -135,12 +154,7 @@ class Fixture:
                                       if row['path'].startswith('python/')),
                 },
                 'pyinstaller': {'distribution': 'pyinstaller', 'version': verify.PYINSTALLER_VERSION},
-                'distributions': [{
-                    'name': 'pyinstaller', 'version': verify.PYINSTALLER_VERSION,
-                    'record_sha256': sha(b'record bytes'),
-                    'members': sorted(row['path'] for row in snapshot_files
-                                      if row['path'].startswith('env/')),
-                }],
+                'distributions': distributions,
                 'tools': [
                     {'name': 'host/lib/libz.so.1', 'member': 'host/lib/libz.so.1'},
                     {'name': 'ld', 'member': 'host/bin/ld'},
@@ -224,7 +238,7 @@ class ProvenanceContractTests(unittest.TestCase):
         self.refuses(downgrade, 'no downgrade')
 
         def future(record):
-            record['schema'] = 'kilix.voicebox.sidecar-provenance/candidate-v3'
+            record['schema'] = 'kilix.voicebox.sidecar-provenance/candidate-v4'
         self.refuses(future, 'no downgrade')
 
         def unknown(record):
@@ -262,7 +276,7 @@ class ProvenanceContractTests(unittest.TestCase):
     def test_staged_input_membership_families(self):
         def drop(record):
             record['inputs']['completion']['files'].pop()
-        self.refuses(drop, '19 rows')
+        self.refuses(drop, '20 rows')
 
         def foreign(record):
             row = dict(record['inputs']['completion']['files'][0])
@@ -332,7 +346,7 @@ class ProvenanceContractTests(unittest.TestCase):
                      'unsupported mode')
 
     def test_archive_families(self):
-        self.refuses(lambda r: r['build']['archive']['selected_modules'].pop(), '15 modules')
+        self.refuses(lambda r: r['build']['archive']['selected_modules'].pop(), '16 modules')
 
         def unselected(record):
             record['build']['archive']['selected_modules'][0]['name'] = 'qwen.engine'

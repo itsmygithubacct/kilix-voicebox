@@ -860,20 +860,10 @@ class SidecarProducerTests(unittest.TestCase):
         return Path(temporary.name) / "stage"
 
     def install(self, stub: StubbedPyInstaller) -> None:
-        previous = {
-            name: sys.modules.get(name) for name in ("PyInstaller", "PyInstaller.__main__")
-        }
-
-        def restore() -> None:
-            for name, module in previous.items():
-                if module is None:
-                    sys.modules.pop(name, None)
-                else:
-                    sys.modules[name] = module
-
-        self.addCleanup(restore)
-        sys.modules["PyInstaller"] = stub
-        sys.modules["PyInstaller.__main__"] = stub
+        from .producer_fixture import ControlledProducer
+        fixture = ControlledProducer(stub)
+        fixture.__enter__()
+        self.addCleanup(fixture.__exit__, None, None, None)
 
     def read_handoff(self, handoff: Path) -> dict[str, str]:
         fields: dict[str, str] = {}
@@ -910,7 +900,7 @@ class SidecarProducerTests(unittest.TestCase):
         )
         manifest = json.loads(provenance.read_text(encoding="utf-8"))
         self.assertEqual(
-            manifest["schema"], "kilix.voicebox.sidecar-provenance/candidate-v1"
+            manifest["schema"], "kilix.voicebox.sidecar-provenance/candidate-v3"
         )
         self.assertEqual(manifest["sidecar_sha256"], fields["binary_sha256"])
         self.assertIs(manifest["contains_model_runtime"], False)
@@ -950,14 +940,25 @@ class SidecarProducerTests(unittest.TestCase):
         self.assertIn("build id", str(caught.exception))
         self.assertFalse(stage.exists())
 
-    def test_producer_names_a_windows_output_in_its_handoff(self) -> None:
+    def test_linux_producer_refuses_windows_output_without_publishing(self) -> None:
+        # The production target is Linux; the generic collector separately
+        # retains its Windows-filename coverage. A foreign worker output is
+        # diagnostic evidence, never a fallback production binary.
         stub = StubbedPyInstaller(behaviour="windows")
         self.install(stub)
         stage = self.stage()
-        handoff = build_binary.build_server(stage, "e" * 32)
-        self.assertEqual(
-            self.read_handoff(handoff)["binary"], "dist/voicebox-server.exe"
-        )
+        previous = stage.parent / "previous-sidecar"
+        previous.write_bytes(b"preserved prior output")
+        previous.chmod(0o600)
+        with self.assertRaisesRegex(build_binary.BuildError, "not a regular file"):
+            build_binary.build_server(stage, "e" * 32)
+        self.assertEqual((stage / "dist/voicebox-server.exe").read_bytes(), stub.payload)
+        self.assertTrue((stage / "selected-inputs/completion.json").is_file())
+        self.assertFalse((stage / "dist/voicebox-server").exists())
+        self.assertFalse((stage / "dist/voicebox-server.provenance.json").exists())
+        self.assertFalse((stage / "sidecar-outputs").exists())
+        self.assertEqual(previous.read_bytes(), b"preserved prior output")
+        self.assertEqual(previous.stat().st_mode & 0o777, 0o600)
 
     def test_producer_generates_its_own_identity_when_none_is_given(self) -> None:
         stub = StubbedPyInstaller()

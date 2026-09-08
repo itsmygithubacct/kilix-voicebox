@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import importlib.util
+import json
 import os
 import shlex
 import subprocess
@@ -81,6 +82,51 @@ class CuratedImportTests(unittest.TestCase):
         self.assertLessEqual(counts["remotes"], 1)
         self.assertEqual(counts["remote_fetch_urls"], counts["remotes"])
         self.assertEqual(counts["remote_push_urls"], counts["remotes"])
+
+    def test_current_control_selection_preserves_historical_record(self):
+        historical = json.loads(verify.git(self.root, "show", "634d6ed0efa49548afd372961cd917391500a9b3:.kilix-import/PROVENANCE.json").stdout)
+        current = copy.deepcopy(self.provenance)
+        self.assertEqual(current.pop("current_controls"), verify.EXPECTED_CURRENT_CONTROLS)
+        self.assertEqual(current, historical)
+        self.assertEqual(len(verify.EXPECTED_CONTROL_PATHS), 4)
+
+    def test_current_control_missing_extra_and_selection_drift_refuse(self):
+        selected = copy.deepcopy(verify.EXPECTED_CURRENT_CONTROLS)
+        paths = sorted(verify.EXPECTED_CONTROL_PATHS + [r["path"] for r in selected["additional"]])
+        for population in (paths[:-1], sorted(paths + [".kilix-import/unselected.json"])):
+            with self.subTest(population=population), self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_current_controls(self.root, population, selected)
+            self.assertEqual(caught.exception.code, "OWNED_POPULATION")
+        for changed in (dict(selected, extra=True), dict(selected, additional=selected["additional"][:1])):
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_current_controls(self.root, paths, changed)
+            self.assertEqual(caught.exception.code, "CURRENT_CONTROL_CONTRACT")
+
+    def test_current_selected_git_bytes_and_mode_are_bound(self):
+        selected = copy.deepcopy(verify.EXPECTED_CURRENT_CONTROLS)
+        paths = sorted(verify.EXPECTED_CONTROL_PATHS + [r["path"] for r in selected["additional"]])
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            self.initialize_repository(root)
+            for row in selected["additional"]:
+                path = root / row["path"]
+                path.parent.mkdir(exist_ok=True)
+                path.write_bytes((self.root / row["path"]).read_bytes())
+            self.commit_all(root)
+            verify.verify_current_controls(root, paths, selected)
+            changed = root / selected["additional"][0]["path"]
+            original = changed.read_bytes()
+            changed.write_bytes(original + b"\n")
+            self.commit_all(root)
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_current_controls(root, paths, selected)
+            self.assertEqual(caught.exception.code, "CURRENT_CONTROL_BYTES")
+            changed.write_bytes(original)
+            changed.chmod(0o755)
+            self.commit_all(root)
+            with self.assertRaises(verify.ImportErrorDetail) as caught:
+                verify.verify_current_controls(root, paths, selected)
+            self.assertEqual(caught.exception.code, "CURRENT_CONTROL_MODE")
 
     def test_historical_match_measurement_is_reproducible(self) -> None:
         boundary = self.provenance["hygiene_delta"]["generated_binary_boundary"]
