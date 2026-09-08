@@ -21,7 +21,7 @@ import zipfile
 import zlib
 
 
-MANIFEST_SHA256 = "63a8498f47b1c8c1daf78a4d62b3f98bb6ba53a29f8caeb9929395163b5f2d8e"
+MANIFEST_SHA256 = "fa26ea1c27217be6f9eb4509bd84e3c0b8f4c02a95913d5cd2cadd0c352b59d2"
 MAX_BYTES = 1024 * 1024
 TIMEOUT_SECONDS = 30
 DIRECTORY_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC
@@ -365,7 +365,7 @@ def _stage(voice_source: str | Path, transcribe_source: str | Path,
         verify_population()
         verify_inputs()
         completion = {
-            "schema": "kilix.voicebox.sidecar-stage/v1",
+            "schema": "kilix.voicebox.sidecar-stage/v2",
             "input_manifest_sha256": MANIFEST_SHA256,
             "sources": {key: {k: spec[k] for k in ("repository", "commit", "tree")}
                         for key, spec in manifest["sources"].items()},

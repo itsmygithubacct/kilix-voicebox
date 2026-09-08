@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 import stat
 import subprocess
+import sys
 import tempfile
 import time
 import unittest
@@ -37,8 +38,9 @@ class StructuralTests(unittest.TestCase):
         raw = (ROOT / ".kilix-import/sidecar-inputs.json").read_bytes()
         self.assertEqual(stage.digest(raw), stage.MANIFEST_SHA256)
         rows = [row for spec in MANIFEST["sources"].values() for row in spec["members"]]
-        self.assertEqual(len(rows), 19)
-        self.assertEqual(sum(r["role"] == "module" for r in rows), 15)
+        self.assertEqual(MANIFEST["schema"], "kilix.voicebox.sidecar-inputs/v2")
+        self.assertEqual(len(rows), 20)
+        self.assertEqual(sum(r["role"] == "module" for r in rows), 16)
         self.assertEqual(sum(r["role"] == "helper" for r in rows), 1)
         self.assertEqual(sum(r["role"] == "license" for r in rows), 2)
         self.assertEqual(sum(r["role"] == "version" for r in rows), 1)
@@ -175,7 +177,39 @@ class SelectedInputTests(unittest.TestCase):
         second = json.loads((self.output / "completion.json").read_bytes())
         self.validate(second)
         self.assertEqual(first, second)
-        self.assertEqual(json.loads(result.stdout)["files"], 19)
+        self.assertEqual(json.loads(result.stdout)["files"], 20)
+        self.assertEqual(second["schema"], "kilix.voicebox.sidecar-stage/v2")
+
+    def test_exact_added_output_is_causal_for_all_transcribe_imports(self):
+        completion = stage.stage(**self.kwargs)
+        self.validate(completion)
+        added = self.output / "python/kilix_transcribe/output.py"
+        original = added.read_bytes()
+        self.assertEqual(stage.digest(original), "7a97d97cceb8e7b8f3bf7daa427e81778ec27dedfdaeecb506ccbafb81257f43")
+        names = ["kilix_transcribe", "kilix_transcribe.output", "kilix_transcribe.owned",
+                 "kilix_transcribe.protocol", "kilix_transcribe.results", "kilix_transcribe.runtime",
+                 "kilix_transcribe.service", "kilix_transcribe.surface"]
+        code = ("import importlib,json,pathlib,sys;root=pathlib.Path(sys.argv[1]);sys.path.insert(0,str(root));"
+                "mods=[importlib.import_module(n) for n in sys.argv[2:]];"
+                "assert all(pathlib.Path(m.__file__).is_relative_to(root) for m in mods);"
+                "print(json.dumps({m.__name__:m.__file__ for m in mods}))")
+        def run():
+            return subprocess.run([sys.executable, "-I", "-B", "-S", "-c", code,
+                                   str(self.output / "python"), *names], capture_output=True, timeout=5)
+        added.unlink()
+        old = run()
+        self.assertEqual(old.returncode, 1)
+        self.assertIn(b"No module named 'kilix_transcribe.output'", old.stderr)
+        added.write_bytes(original)
+        added.chmod(0o600)
+        corrected = run()
+        self.assertEqual(corrected.returncode, 0, corrected.stderr)
+        self.assertEqual(set(json.loads(corrected.stdout)), set(names))
+        self.validate(completion)
+
+    def test_old_manifest_authority_refuses_before_allocation(self):
+        with mock.patch.object(stage, "MANIFEST_SHA256", "63a8498f47b1c8c1daf78a4d62b3f98bb6ba53a29f8caeb9929395163b5f2d8e"):
+            self.assert_refused()
 
     def test_missing_and_changed_modules_helper_version_notices(self):
         self.mutable_sources()
@@ -183,6 +217,7 @@ class SelectedInputTests(unittest.TestCase):
                  ("voice_source", "voicelib/microphone_supervisor.py"),
                  ("voice_source", "VERSION"), ("voice_source", "LICENSE"),
                  ("transcribe_source", "src/kilix_transcribe/service.py"),
+                 ("transcribe_source", "src/kilix_transcribe/output.py"),
                  ("transcribe_source", "LICENSE")]
         for key, name in cases:
             path = self.kwargs[key] / name

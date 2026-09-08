@@ -50,7 +50,7 @@ WORK_NAME = "work"
 BINARY_STEM = "voicebox-server"
 PROVENANCE_NAME = f"{BINARY_STEM}.provenance.json"
 BUILD_ID_PATTERN = re.compile(r"\A[0-9a-f]{8,64}\Z")
-PROVENANCE_SCHEMA = "kilix.voicebox.sidecar-provenance/candidate-v2"
+PROVENANCE_SCHEMA = "kilix.voicebox.sidecar-provenance/candidate-v3"
 FILE_LIMIT = 128 * 1024 * 1024
 BUNDLE_LIMIT = 512 * 1024 * 1024
 STAGE_LIMIT = 1024 * 1024 * 1024
@@ -282,7 +282,7 @@ def _projection(stage: Path, population: Population, voice_source: Path,
             modules.append({"name": name, "path": "projection/" + row["path"], "sha256": row["sha256"]})
         else:
             plaintext.append({"path": row["path"].removeprefix("python/"), "bytes": row["bytes"], "sha256": row["sha256"]})
-    _require(len(modules) == 15 and len(plaintext) == 4, "unexpected projection denominator")
+    _require(len(modules) == 16 and len(plaintext) == 4, "unexpected projection denominator")
     inputs = {"completion": completion,
               "completion_sha256": hashlib.sha256(module.json_bytes(completion)).hexdigest(),
               "plaintext": sorted(plaintext, key=lambda row: row["path"])}
@@ -293,7 +293,7 @@ def _completion(completion: dict, manifest: dict, expected: list[dict]) -> None:
     _require(type(completion) is dict and set(completion) == {
         "schema", "input_manifest_sha256", "sources", "wheel", "observed_source_modes",
         "observed_wheel_mode", "files"}, "unknown or missing completion field")
-    _require(completion["schema"] == "kilix.voicebox.sidecar-stage/v1"
+    _require(completion["schema"] == "kilix.voicebox.sidecar-stage/v2"
              and completion["input_manifest_sha256"] == hashlib.sha256(_read(ROOT / ".kilix-import/sidecar-inputs.json")).hexdigest(),
              "completion authority mismatch")
     _require(completion["sources"] == {name: {key: source[key] for key in ("repository", "commit", "tree")}
@@ -304,7 +304,7 @@ def _completion(completion: dict, manifest: dict, expected: list[dict]) -> None:
     modes = completion["observed_source_modes"]
     _require(type(modes) is dict and set(modes) == names and all(x in ("0600", "0644") for x in modes.values())
              and completion["observed_wheel_mode"] in ("0600", "0644"), "completion mode population mismatch")
-    _require(completion["files"] == expected and len(expected) == 19, "input completion population mismatch")
+    _require(completion["files"] == expected and len(expected) == 20, "input completion population mismatch")
 
 
 def _external_inputs(voice: Path, transcribe: Path, wheel: Path, watches: dict) -> None:
@@ -655,6 +655,31 @@ def _code_digest(code: types.CodeType) -> str:
     return hashlib.sha256(_json(binding(code))).hexdigest()
 
 
+def _pyinstaller_arguments(request: dict) -> list[str]:
+    hidden = ["kilix_voicebox_backend", "kilix_voicebox_backend.main", "kilix_voicebox_backend.config",
+              "kilix_voicebox_backend.database", "kilix_voicebox_backend.models", "kilix_voicebox_backend.profiles",
+              "kilix_voicebox_backend.history", "kilix_voicebox_backend.tts", "kilix_voicebox_backend.transcribe",
+              "kilix_voicebox_backend.kilix_provider", "kilix_voicebox_backend.orchestrator",
+              "kilix_voicebox_backend.private_store", "kilix_voicebox_backend.managed_capture",
+              "kilix_voicebox_backend.utils.audio", "kilix_voicebox_backend.utils.cache",
+              "kilix_voicebox_backend.utils.validation", "fastapi", "uvicorn", "sqlalchemy", "soundfile"]
+    hidden += [row["name"] for row in request["modules"]]
+    arguments = ["/sealed/source/kilix_voicebox_backend/server.py", "--onefile", "--name", BINARY_STEM,
+                 "--paths", "/sealed/source", "--paths", "/sealed/projection/python", "--paths", "/sealed/env",
+                 "--distpath", "/output/dist", "--workpath", "/output/work", "--specpath", "/output/work",
+                 "--noconfirm", "--clean", "--noupx"]
+    for name in hidden:
+        arguments.extend(("--hidden-import", name))
+    for row in request["plaintext"]:
+        source = "/sealed/projection/" + ("python/" if row["path"] in ("VERSION", "voicelib/microphone_supervisor.py") else "") + row["path"]
+        target = str(Path(row["path"]).parent)
+        arguments.extend(("--add-data", source + ":" + target))
+    for name in ("kilix_transcribe.worker", "kilix_transcribe.cli", "kilix_transcribe.content",
+                 "kilix_qwen_tts", "kilix_content", "torch", "onnxruntime", "transformers"):
+        arguments.extend(("--exclude-module", name))
+    return arguments
+
+
 def _frozen_build() -> None:
     # This function is executed only by the fixed namespace bootstrap, using
     # the immutable copy of this exact source module and the selected Python.
@@ -678,27 +703,7 @@ def _frozen_build() -> None:
     import PyInstaller.__main__
     _require(PyInstaller.__version__ == "6.15.0" and str(Path(PyInstaller.__file__)).startswith("/sealed/env/"),
              "PyInstaller origin/version mismatch")
-    hidden = ["kilix_voicebox_backend", "kilix_voicebox_backend.main", "kilix_voicebox_backend.config",
-              "kilix_voicebox_backend.database", "kilix_voicebox_backend.models", "kilix_voicebox_backend.profiles",
-              "kilix_voicebox_backend.history", "kilix_voicebox_backend.tts", "kilix_voicebox_backend.transcribe",
-              "kilix_voicebox_backend.kilix_provider", "kilix_voicebox_backend.orchestrator",
-              "kilix_voicebox_backend.private_store", "kilix_voicebox_backend.managed_capture",
-              "kilix_voicebox_backend.utils.audio", "kilix_voicebox_backend.utils.cache",
-              "kilix_voicebox_backend.utils.validation", "fastapi", "uvicorn", "sqlalchemy", "soundfile"]
-    hidden += [row["name"] for row in request["modules"]]
-    arguments = ["/sealed/source/kilix_voicebox_backend/server.py", "--onefile", "--name", BINARY_STEM,
-                 "--paths", "/sealed/source", "--paths", "/sealed/projection/python", "--paths", "/sealed/env",
-                 "--distpath", "/output/dist", "--workpath", "/output/work", "--specpath", "/output/work",
-                 "--noconfirm", "--clean", "--noupx"]
-    for name in hidden:
-        arguments.extend(("--hidden-import", name))
-    for row in request["plaintext"]:
-        source = "/sealed/projection/" + ("python/" if row["path"] in ("VERSION", "voicelib/microphone_supervisor.py") else "") + row["path"]
-        target = str(Path(row["path"]).parent)
-        arguments.extend(("--add-data", source + ":" + target))
-    for name in ("kilix_transcribe.worker", "kilix_transcribe.cli", "kilix_transcribe.content",
-                 "kilix_qwen_tts", "kilix_content", "torch", "onnxruntime", "transformers"):
-        arguments.extend(("--exclude-module", name))
+    arguments = _pyinstaller_arguments(request)
     PyInstaller.__main__.run(arguments)
     from PyInstaller.archive.readers import CArchiveReader
     binary = Path("/output/dist") / BINARY_STEM
@@ -749,7 +754,7 @@ def _archive(value: object, modules: list[dict], plaintext: list[dict]) -> dict:
     _require(type(value) is dict and set(value) == {"selected_modules", "plaintext", "entries", "options"},
              "unknown or missing archive inspection field")
     selected = value["selected_modules"]
-    _require(type(selected) is list and len(selected) == len(modules) == 15, "archive module population mismatch")
+    _require(type(selected) is list and len(selected) == len(modules) == 16, "archive module population mismatch")
     for row, expected in zip(selected, modules):
         _require(type(row) is dict and set(row) == {"name", "source_sha256", "code_sha256"}
                  and row["name"] == expected["name"] and row["source_sha256"] == expected["sha256"]
@@ -853,7 +858,10 @@ def build_server(stage_dir: Path | str, build_id: str | None = None, *,
              "product source identity changed through build")
     inspection = _archive(_strict_json(_read(stage / "archive-inspection.json")), modules, inputs["plaintext"])
     binary = stage / DIST_NAME / BINARY_STEM
-    binary_raw = _read(binary)
+    try:
+        binary_raw = _read(binary)
+    except OSError as exc:
+        raise BuildError("Error: produced sidecar is not a regular file") from exc
     _require(bool(binary_raw) and bool(binary.stat().st_mode & 0o111), "produced sidecar is not executable")
     manifest = {
         "schema": PROVENANCE_SCHEMA, "build_id": identity, **source,

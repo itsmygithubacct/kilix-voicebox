@@ -8,14 +8,14 @@
       {
         "path": ".kilix-import/sidecar-inputs.json",
         "git_mode": "100644",
-        "bytes": 14795,
-        "sha256": "63a8498f47b1c8c1daf78a4d62b3f98bb6ba53a29f8caeb9929395163b5f2d8e"
+        "bytes": 15330,
+        "sha256": "fa26ea1c27217be6f9eb4509bd84e3c0b8f4c02a95913d5cd2cadd0c352b59d2"
       },
       {
         "path": ".kilix-import/test_sidecar_inputs.py",
         "git_mode": "100644",
-        "bytes": 17641,
-        "sha256": "823b2ab9f4fa3bef4d8d565878a44cf9f228d7084f88a5fdb46afb5ceb7c01a1"
+        "bytes": 19750,
+        "sha256": "f08846535125e96500d19b7615cf62c1fd3ae607bf352a88049e54d3fa34177b"
       }
     ]
   },

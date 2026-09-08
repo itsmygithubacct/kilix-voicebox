@@ -5,7 +5,12 @@ component. It validates explicit local software inputs and writes a private
 projection for later sidecar integration. It does not import those inputs,
 install packages, resolve dependencies, launch providers or build a sidecar.
 
-The adjacent `.kilix-import/sidecar-inputs.json` is bound by SHA256 in the tool.
+The adjacent `.kilix-import/sidecar-inputs.json` uses schema
+`kilix.voicebox.sidecar-inputs/v2` and is bound by SHA256 in the tool.
+Completion uses `kilix.voicebox.sidecar-stage/v2`; old manifest/completion
+identities refuse. The only added payload is the unchanged transcribe output.py
+needed by its package initializer. Source commits, whole wheel, existing payloads
+and four plaintext resources remain unchanged.
 There is no alternate-manifest or source-override switch. It selects:
 
 | Input | Exact identity |
@@ -47,23 +52,23 @@ owned, single-link regular source file may be 0600 or 0644; observed modes
 are recorded. Executable, shared-writable, special and linked inputs refuse.
 The whole wheel digest and all 20 members' names, bytes, exact Unix modes,
 compression and RECORD identities are checked without extraction. Only the
-selected eight wheel members are compared with their source counterparts;
+selected nine wheel members are compared with their source counterparts;
 unused wheel code and metadata are validated but never staged or executed.
 The complete tracked LICENSE/LICENCE/NOTICE/COPYING population of each selected
 commit is enumerated: these two revisions each contain one root LICENSE.
 
-The output has exactly 19 payload files and one `completion.json`:
+The output has exactly 20 payload files and one `completion.json`:
 
 | Location | Population |
 | --- | --- |
 | `python/voicelib/` | Eight importable modules: `__init__`, `audio`, `microphone`, `settings`, `util`, `models`, `paths`, `device_leases` |
-| `python/kilix_transcribe/` | Seven importable modules: `__init__`, `service`, `protocol`, `runtime`, `results`, `surface`, `owned` |
+| `python/kilix_transcribe/` | Eight importable modules: `__init__`, `output`, `service`, `protocol`, `runtime`, `results`, `surface`, `owned` |
 | `python/voicelib/microphone_supervisor.py` | The unchanged plaintext helper, beside `microphone.py` |
 | `python/VERSION` | The actual selected Voice version file |
 | `licenses/kilix-voice/LICENSE` | Complete selected Voice license bytes |
 | `licenses/kilix-transcribe/LICENSE` | Complete selected transcribe license bytes, also verified against the wheel |
 
-There are 15 importable projection modules plus the separate helper: 16
+There are 16 importable projection modules plus the separate helper: 17
 Python files physically present. The helper must remain a real plaintext
 file at that relative location in the eventual extracted sidecar layout.
 The unchanged microphone code invokes it with `/usr/bin/python3 -I -B -S`.
@@ -133,7 +138,7 @@ unchanged lock. Whole archive hashes/sizes and complete RECORD populations
 are checked before staging. There is no acquisition, cache fallback or version
 substitution. CPython3.12.8 and PyInstaller6.15.0 remain fixed.
 
-The producer binds clean raw Git source, all19 selected payloads, the complete
+The producer binds clean raw Git source, all20 selected payloads, the complete
 selected interpreter/package/tool population and original wheel archives.
 A sealed memory file carries that population into a private namespace with
 network isolation. Package code executes only after the selected files are
@@ -145,9 +150,9 @@ detect identity changes during execution. Immutable consumed bytes remain
 protected even when filesystem timestamp granularity hides a transient change.
 
 Actual PyInstaller output is inspected with the selected archive reader:
-15 extracted code objects are compared to compiled selected sources, and the
+16 extracted code objects are compared to compiled selected sources, and the
 four plaintext helper/VERSION/notice files are compared byte for byte. The
-complete extractable archive population is bound. The v2 provenance schema,
+complete extractable archive population is bound. The v3 provenance schema,
 strict metadata policy and consumer obligations are fixed in
 [the build contract](sidecar-build-contract.md). The separate output-handoff
 schema stays v1 and is published last; failures retain their private stage

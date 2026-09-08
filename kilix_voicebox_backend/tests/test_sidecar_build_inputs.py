@@ -172,7 +172,7 @@ class BuildInputTests(unittest.TestCase):
 
     def test_archive_inspection_refuses_unknown_missing_duplicate_and_mutated_rows(self):
         digest = "a" * 64
-        modules = [{"name": f"module{i:02}", "sha256": digest} for i in range(15)]
+        modules = [{"name": f"module{i:02}", "sha256": digest} for i in range(16)]
         plain = [{"path": f"plain{i}", "bytes": 1, "sha256": digest} for i in range(4)]
         value = {"selected_modules": [{"name": row["name"], "source_sha256": digest, "code_sha256": digest} for row in modules],
                  "plaintext": plain, "entries": [{"path": "PYZ.pyz", "bytes": 1, "kind": "z", "sha256": digest}], "options": []}
@@ -246,8 +246,8 @@ class SelectedProjectionTests(unittest.TestCase):
         stage.mkdir(mode=0o700)
         population = build.Population(self.root / "snapshot")
         inputs, modules, expected = build._projection(stage, population, **actual)
-        self.assertEqual((len(modules), len(expected), len(inputs["plaintext"])), (15, 19, 4))
-        self.assertEqual(len(population.rows), 19)
+        self.assertEqual((len(modules), len(expected), len(inputs["plaintext"])), (16, 20, 4))
+        self.assertEqual(len(population.rows), 20)
         build._stage_inputs_unchanged(stage, inputs)
         (stage / "selected-inputs/python/voicelib/microphone_supervisor.py").write_bytes(b"changed")
         with self.assertRaises(build.BuildError):
@@ -259,12 +259,14 @@ class SelectedProjectionTests(unittest.TestCase):
         stage.mkdir(mode=0o700)
         inputs, _, expected = build._projection(stage, build.Population(self.root / "snapshot"), **actual)
         manifest = json.loads((build.ROOT / ".kilix-import/sidecar-inputs.json").read_bytes())
-        for change in ("unknown", "wheel", "notice", "source"):
+        for change in ("unknown", "wheel", "notice", "source", "old-schema", "old-population"):
             altered = copy.deepcopy(inputs["completion"])
             if change == "unknown": altered["future"] = True
             if change == "wheel": altered["wheel"]["sha256"] = "0" * 64
             if change == "notice": altered["files"] = altered["files"][1:]
             if change == "source": altered["sources"]["voice"]["tree"] = "0" * 40
+            if change == "old-schema": altered["schema"] = "kilix.voicebox.sidecar-stage/v1"
+            if change == "old-population": altered["files"] = [r for r in altered["files"] if not r["path"].endswith("/output.py")]
             with self.subTest(change=change), self.assertRaises(build.BuildError):
                 build._completion(altered, manifest, expected)
 

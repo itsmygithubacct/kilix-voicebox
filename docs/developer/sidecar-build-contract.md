@@ -1,11 +1,23 @@
-# Sidecar provenance consumer contract
+# Sidecar provenance consumer contract — candidate-v3
 
-This document fixes `kilix.voicebox.sidecar-provenance/candidate-v2`. It is a
+This document fixes `kilix.voicebox.sidecar-provenance/candidate-v3`. It is a
 candidate build/consumer contract, not release approval. The collector's
 separate `kilix.voicebox.sidecar-output/candidate-v1` handoff stays unchanged.
 Its build_id, binary relative path/hash/size and provenance relative path/hash
 must all identify the same invocation and actual files. A consumer must not
 infer approval from a schema string or reuse a previous invocation's files.
+
+## C23 selected-input correction
+
+The selected manifest is `kilix.voicebox.sidecar-inputs/v2`, frozen as
+C23-SIDECAR-INPUTS-V2.json. Relative to C19 it adds only the existing selected
+transcribe source/wheel member `kilix_transcribe/output.py`, required by the
+unchanged package initializer. The population is now 20 files and 16 modules;
+source commits/trees, whole-wheel identity, all existing selected bytes, four
+plaintext resources and the software lock remain unchanged. No engine, CLI,
+provider runtime or model is added. The previous candidate-v2 contract remains
+immutable historical evidence; its records are not valid candidate-v3 records.
+Producer, stager and consumer must adopt this version together.
 
 ## Envelope and parsing
 
@@ -21,7 +33,7 @@ The top-level object has exactly these eleven keys:
 
 | Key | Required value/type |
 | --- | --- |
-| schema | `kilix.voicebox.sidecar-provenance/candidate-v2` |
+| schema | `kilix.voicebox.sidecar-provenance/candidate-v3` |
 | build_id | 8–64 lowercase hexadecimal characters; exact handoff build_id |
 | source_commit | 40 lowercase hex characters; clean exact product commit |
 | source_tree | 40 lowercase hex characters; that commit's complete Git tree |
@@ -46,14 +58,14 @@ or version labels. No local checkout/cache/HOME paths belong in provenance.
 
 `inputs` has exactly `completion_sha256`, `completion`, and `plaintext`.
 
-`completion` is the entire unchanged C19 `kilix.voicebox.sidecar-stage/v1`
-record. It has exactly `schema`, `input_manifest_sha256`, `sources`, `wheel`,
+`completion` is the C23 `kilix.voicebox.sidecar-stage/v2` record. Its
+field layout preserves C19 while the selected population is import-complete. It has exactly `schema`, `input_manifest_sha256`, `sources`, `wheel`,
 `observed_source_modes`, `observed_wheel_mode`, and `files`, with their exact
 selected population from `.kilix-import/sidecar-inputs.json`. Its own canonical
 encoding remains C19's sorted/indented-two-spaces UTF-8 JSON plus LF, **not**
 the outer compact encoding. `completion_sha256` hashes that C19 encoding.
 The selected input manifest digest must be
-`63a8498f47b1c8c1daf78a4d62b3f98bb6ba53a29f8caeb9929395163b5f2d8e`.
+`fa26ea1c27217be6f9eb4509bd84e3c0b8f4c02a95913d5cd2cadd0c352b59d2`.
 
 The sources object contains exactly voice/transcribe; each has exactly
 repository/commit/tree, matching the manifest. Voice commit is
@@ -62,9 +74,9 @@ repository/commit/tree, matching the manifest. Voice commit is
 filename/bytes/sha256, matching kilix_transcribe-0.1.0-py3-none-any.whl,
 46,454 bytes and
 5d6ffab4c5237a45107eff9a23a177ae23759018e3cea60c19f7509bc592f2fb.
-Observed source-mode keys are exactly the 19 selected source names prefixed
+Observed source-mode keys are exactly the 20 selected source names prefixed
 by voice/ or transcribe/; values are `0600` or `0644`. Observed wheel mode is
-one of those two strings. `files` has the exact 19 selected rows, sorted by
+one of those two strings. `files` has the exact 20 selected rows, sorted by
 path, each with exactly path/bytes/sha256/mode/role. Mode is `0600`; each
 other value must match the checked-in input manifest. No additional worker,
 CLI, Qwen, Content or model input may be added through completion metadata.
@@ -132,7 +144,7 @@ dependencies. Kernel/OS release approval is not inferred from these rows.
 
 `archive` has exactly `selected_modules`, `plaintext`, `entries`, and `options`.
 
-selected_modules has the exact 15 projection module names, sorted by name.
+selected_modules has the exact 16 projection module names, sorted by name.
 Each row has exactly name/source_sha256/code_sha256. source_sha256 matches
 the completion row; code_sha256 identifies the Python3.12 compiled code
 extracted by the selected PyInstaller archive reader and checked against the
@@ -156,7 +168,7 @@ agree. Unknown metadata keys never stand in for an uninspected entry.
 The consumer must parse strictly, bind the actual binary and provenance to
 the exact handoff build_id/digests/length, validate every field above, and
 preserve the selected plaintext/notice identities wherever resources are
-shipped. A missing/old-v1/unknown-v3 record must refuse; there is no silent
+shipped. A missing/old-v1/old-v2/unknown-v4 record must refuse; there is no silent
 schema downgrade. Changing these fields or their identity rules requires a
 new schema version and coordinated producer/consumer review.
 

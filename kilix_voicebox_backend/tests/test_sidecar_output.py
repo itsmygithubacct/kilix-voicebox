@@ -482,20 +482,10 @@ class SidecarProducerTests(unittest.TestCase):
         return Path(temporary.name) / "stage"
 
     def install(self, stub: StubbedPyInstaller) -> None:
-        previous = {
-            name: sys.modules.get(name) for name in ("PyInstaller", "PyInstaller.__main__")
-        }
-
-        def restore() -> None:
-            for name, module in previous.items():
-                if module is None:
-                    sys.modules.pop(name, None)
-                else:
-                    sys.modules[name] = module
-
-        self.addCleanup(restore)
-        sys.modules["PyInstaller"] = stub
-        sys.modules["PyInstaller.__main__"] = stub
+        from .producer_fixture import ControlledProducer
+        fixture = ControlledProducer(stub)
+        fixture.__enter__()
+        self.addCleanup(fixture.__exit__, None, None, None)
 
     def read_handoff(self, handoff: Path) -> dict[str, str]:
         fields: dict[str, str] = {}
@@ -532,7 +522,7 @@ class SidecarProducerTests(unittest.TestCase):
         )
         manifest = json.loads(provenance.read_text(encoding="utf-8"))
         self.assertEqual(
-            manifest["schema"], "kilix.voicebox.sidecar-provenance/candidate-v1"
+            manifest["schema"], "kilix.voicebox.sidecar-provenance/candidate-v3"
         )
         self.assertEqual(manifest["sidecar_sha256"], fields["binary_sha256"])
         self.assertIs(manifest["contains_model_runtime"], False)
@@ -580,6 +570,15 @@ class SidecarProducerTests(unittest.TestCase):
         self.assertEqual(
             self.read_handoff(handoff)["binary"], "dist/voicebox-server.exe"
         )
+
+    def test_linux_producer_refuses_windows_only_output_without_handoff(self) -> None:
+        stub = StubbedPyInstaller(behaviour="windows")
+        self.install(stub)
+        stage = self.stage()
+        with self.assertRaisesRegex(build_binary.BuildError, "not a regular file"):
+            build_binary.build_server(stage, "f" * 32)
+        self.assertTrue((stage / "dist/voicebox-server.exe").is_file())
+        self.assertFalse((stage / "sidecar-outputs").exists())
 
     def test_producer_generates_its_own_identity_when_none_is_given(self) -> None:
         stub = StubbedPyInstaller()
