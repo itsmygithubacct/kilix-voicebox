@@ -511,6 +511,25 @@ class CuratedImportTests(unittest.TestCase):
             scripts.mkdir(parents=True)
             tools.mkdir()
             poison.mkdir()
+            # The collector now stages outside the checkout and is handed every
+            # input explicitly, so the fixture owns a stage root, a private
+            # build home and the selected inputs, and keeps its observations
+            # outside the stage the build removes.
+            stage_root = temporary / "stage-root"
+            record = temporary / "observed"
+            selected = temporary / "selected"
+            stage_root.mkdir()
+            record.mkdir()
+            for name in ("voice", "transcribe", "wheelhouse", "python-home",
+                         "private-home"):
+                (selected / name).mkdir(parents=True)
+            wheel = selected / "kilix_transcribe-0.1.0-py3-none-any.whl"
+            wheel.write_bytes(b"controlled wheel bytes")
+            producer = selected / "build_binary.py"
+            producer.write_text("# controlled producer, never executed here\n",
+                                encoding="utf-8")
+            build_id = "0123456789abcdef0123456789abcdef"
+            stage = stage_root / ("stage-" + build_id)
 
             build_script = scripts / "build-server.sh"
             build_script.write_bytes(
@@ -531,18 +550,43 @@ class CuratedImportTests(unittest.TestCase):
             )
             rustc.chmod(0o755)
 
-            # The stand-in producer takes its output location from the
-            # arguments the build script passed it, and writes the handoff that
-            # script collects from. A stub that wrote to a path of its own
-            # choosing would prove the environment filter while concealing the
-            # producer/consumer contract, which is how the real output-path
-            # mismatch survived this control.
-            uv = tools / "uv"
-            uv.write_text(
-                """#!/bin/sh
-set -eu
+            # The stand-in is now reached the way the collector actually reaches
+            # the producer: as the selected interpreter, by absolute path, with
+            # -I -B -S and the producer script, and every input as an explicit
+            # argument. It takes its output location from those arguments, so a
+            # stub writing to a path of its own choosing would prove the
+            # environment filter while concealing the producer/consumer
+            # contract -- which is how the real output-path mismatch once
+            # survived this control.
+            #
+            # It records argv, its whole environment and the status of a
+            # TRANSITIVE child interpreter outside the stage, because the stage
+            # is removed by the build whose behaviour is being observed. The
+            # environment assertions run after that child, so the negative arm
+            # below can still observe what a lost filter does to it.
+            # The record path is baked in, not passed through the environment:
+            # the collector constructs the producer's environment from nothing,
+            # so no fixture variable of the caller's survives to carry it. That
+            # is the property under test, so the observer must not depend on it.
+            stand_in = """#!/bin/sh
+record="@RECORD@"
+: > "$record/argv"
+for argument in "$@"; do
+    printf '%s\\n' "$argument" >> "$record/argv"
+done
+env > "$record/env"
+# A plain child interpreter: with the caller's PYTHONPATH still in force the
+# poisoned sitecustomize below would run and exit 86 before this returns.
+/usr/bin/python3 -c 'pass'
+printf '%s\\n' "$?" > "$record/child-status"
+
 test "${PYTHONNOUSERSITE-}" = 1
 test "${PYTHONSAFEPATH-}" = 1
+test "${PYTHONDONTWRITEBYTECODE-}" = 1
+test "${PYTHONPATH-unset}" = unset
+test "${PYTHONHOME-unset}" = unset
+test "$(cat "$record/child-status")" = 0
+
 stage=
 build_id=
 while [ $# -gt 0 ]; do
@@ -555,7 +599,7 @@ done
 test -n "$stage"
 test -n "$build_id"
 test ! -e "$stage"
-python3 - "$stage" "$build_id" <<'PRODUCER'
+/usr/bin/python3 - "$stage" "$build_id" <<'PRODUCER'
 import hashlib
 import sys
 from pathlib import Path
@@ -579,17 +623,61 @@ provenance.write_text("{}\\n", encoding="utf-8")
     encoding="ascii",
 )
 PRODUCER
-""",
-                encoding="utf-8",
-            )
-            uv.chmod(0o755)
+"""
+            poisoned_record = temporary / "observed-poisoned"
+            sitecustomize_record = temporary / "observed-sitecustomize"
+            poisoned_record.mkdir()
+            sitecustomize_record.mkdir()
+            interpreter = tools / "selected-python3.12"
+            interpreter.write_text(stand_in.replace("@RECORD@", str(record)),
+                                   encoding="utf-8")
+            interpreter.chmod(0o755)
+            unfiltered_interpreter = tools / "selected-python3.12-unfiltered"
+            unfiltered_interpreter.write_text(
+                stand_in.replace("@RECORD@", str(poisoned_record)), encoding="utf-8")
+            unfiltered_interpreter.chmod(0o755)
+            sitecustomize_interpreter = tools / "selected-python3.12-sitecustomize"
+            sitecustomize_interpreter.write_text(
+                stand_in.replace("@RECORD@", str(sitecustomize_record)),
+                encoding="utf-8")
+            sitecustomize_interpreter.chmod(0o755)
+
+            # Trap executables on the CALLER's PATH. Nothing may resolve a
+            # package manager: the collector must neither invoke one itself nor
+            # leave the caller's PATH in place for the producer. No real
+            # package manager runs and nothing is installed to prove this.
+            traps = {}
+            for name in ("uv", "pip", "pip3", "python3.12"):
+                trap = tools / name
+                traps[name] = tools / (name + ".invoked")
+                trap.write_text(
+                    "#!/bin/sh\nprintf 'invoked\\n' > %s\nexit 97\n"
+                    % (tools / (name + ".invoked")),
+                    encoding="utf-8",
+                )
+                trap.chmod(0o755)
 
             environment = os.environ.copy()
             environment["PATH"] = f"{tools}{os.pathsep}{environment['PATH']}"
             environment["PYTHONPATH"] = str(poison)
             environment["PYTHONHOME"] = str(temporary / "invalid-python-home")
+            environment["PYTHONSTARTUP"] = str(poison / "sitecustomize.py")
+            environment["VOICEBOX_FIXTURE_RECORD"] = str(record)
+            arguments = (
+                str(build_script),
+                "--build-id", build_id,
+                "--stage-dir", str(stage),
+                "--python-executable", str(interpreter),
+                "--producer", str(producer),
+                "--voice-source", str(selected / "voice"),
+                "--transcribe-source", str(selected / "transcribe"),
+                "--transcribe-wheel", str(wheel),
+                "--wheelhouse", str(selected / "wheelhouse"),
+                "--python-home", str(selected / "python-home"),
+                "--private-home", str(selected / "private-home"),
+            )
             result = subprocess.run(
-                (str(build_script),),
+                arguments,
                 cwd=root,
                 check=False,
                 stdout=subprocess.PIPE,
@@ -609,14 +697,105 @@ PRODUCER
                 copied.with_suffix(".provenance.json").read_text(encoding="utf-8"),
                 "{}\n",
             )
-            # The collected bytes came from the staging directory the script
-            # named for this invocation and nowhere else: the pre-rename
-            # `backend/dist` path is never created, and the staging directory
-            # does not survive the build that owned it.
+            # The collected bytes came from the staging directory this
+            # invocation named and nowhere else: the pre-rename `backend/dist`
+            # path is never created, the removed in-checkout build layout is
+            # never created either, and the actual outside-checkout stage does
+            # not survive the build that owned it.
             self.assertFalse((root / "backend").exists())
-            self.assertEqual(
-                sorted((root / "kilix_voicebox_backend" / "build").iterdir()), []
+            self.assertFalse((root / "kilix_voicebox_backend" / "build").exists())
+            self.assertFalse(stage.exists())
+            self.assertEqual(sorted(p.name for p in stage_root.iterdir()), [])
+
+            # The producer was reached as the selected interpreter, by absolute
+            # path, with the exact isolated flags and every explicit input.
+            observed_argv = (record / "argv").read_text(encoding="utf-8").split("\n")[:-1]
+            self.assertEqual(observed_argv[:4], ["-I", "-B", "-S", str(producer)])
+            self.assertEqual(observed_argv[4:], [
+                "--stage-dir", str(stage), "--build-id", build_id,
+                "--voice-source", str(selected / "voice"),
+                "--transcribe-source", str(selected / "transcribe"),
+                "--transcribe-wheel", str(wheel),
+                "--wheelhouse", str(selected / "wheelhouse"),
+                "--python-home", str(selected / "python-home"),
+            ])
+
+            # The environment was constructed, not filtered: no poisoned
+            # variable survives, HOME and TMPDIR are this build's private home,
+            # PATH is fixed, and the transitive child ran unpoisoned.
+            observed = {}
+            for line in (record / "env").read_text(encoding="utf-8").splitlines():
+                key, separator, value = line.partition("=")
+                if separator:
+                    observed.setdefault(key, value)
+            for absent in ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP",
+                           "LD_PRELOAD", "LD_LIBRARY_PATH", "VIRTUAL_ENV",
+                           "VOICEBOX_FIXTURE_RECORD"):
+                self.assertNotIn(absent, observed)
+            self.assertEqual(observed["HOME"], str(selected / "private-home"))
+            self.assertEqual(observed["TMPDIR"], str(selected / "private-home"))
+            self.assertEqual(observed["PATH"], "/usr/bin:/bin")
+            self.assertEqual(observed["PYTHONNOUSERSITE"], "1")
+            self.assertEqual(observed["PYTHONSAFEPATH"], "1")
+            self.assertEqual(observed["PYTHONDONTWRITEBYTECODE"], "1")
+            self.assertEqual((record / "child-status").read_text(encoding="utf-8").strip(),
+                             "0")
+            self.assertNotIn(str(tools), observed["PATH"])
+
+            # No package manager or resolver was invoked, by the collector or
+            # through a surviving caller PATH.
+            for name, marker in traps.items():
+                with self.subTest(trap=name):
+                    self.assertFalse(marker.exists())
+
+            # Negative control: the same stand-in, run with the caller's
+            # poisoned environment instead of the collector's constructed one.
+            # Its transitive child dies under the poisoned sitecustomize, so a
+            # lost environment filter would be detected by the assertions above
+            # rather than passing quietly.
+            unfiltered = subprocess.run(
+                (str(unfiltered_interpreter), "-I", "-B", "-S", str(producer),
+                 "--stage-dir", str(stage_root / "never-used"),
+                 "--build-id", build_id),
+                cwd=root,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=environment,
             )
+            self.assertNotEqual(unfiltered.returncode, 0)
+            # The whole caller poison stops the child; the invalid PYTHONHOME
+            # aborts interpreter start-up before PYTHONPATH is consulted, so
+            # this arm proves detection without naming a particular status.
+            self.assertNotEqual(
+                (poisoned_record / "child-status").read_text(encoding="utf-8").strip(),
+                "0",
+            )
+            self.assertFalse((stage_root / "never-used").exists())
+
+            # The sitecustomize half specifically: PYTHONPATH alone, so the
+            # poisoned sitecustomize really is what runs and exits 86. This is
+            # the exact byte the original control watched for.
+            sitecustomize_only = dict(environment)
+            sitecustomize_only.pop("PYTHONHOME", None)
+            sitecustomize_only.pop("PYTHONSTARTUP", None)
+            reached = subprocess.run(
+                (str(sitecustomize_interpreter), "-I", "-B", "-S", str(producer),
+                 "--stage-dir", str(stage_root / "never-used-either"),
+                 "--build-id", build_id),
+                cwd=root,
+                check=False,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                env=sitecustomize_only,
+            )
+            self.assertNotEqual(reached.returncode, 0)
+            self.assertEqual(
+                (sitecustomize_record / "child-status").read_text(
+                    encoding="utf-8").strip(),
+                "86",
+            )
+            self.assertFalse((stage_root / "never-used-either").exists())
 
     def test_repository_shape_refuses_hidden_index_paths(self) -> None:
         scratch = os.environ.get("TMPDIR")

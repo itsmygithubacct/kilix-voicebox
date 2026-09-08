@@ -561,46 +561,120 @@ class BuildOrderingTests(unittest.TestCase):
         self.assertIn('bridge required', result.stderr)
         self.assertFalse(marker.exists(), 'the frontend build ran despite a refused gate')
 
-    def test_make_j_cannot_package_while_the_sidecar_is_being_published(self):
-        """The real Makefile with controlled stand-ins for the producer and bun.
+    # The orchestrator stand-in reads the route it was actually given instead of
+    # succeeding blindly: it records the requested script and --package value,
+    # runs the single producer-bearing step, and only then runs the packaging
+    # command the Makefile handed it. `$FAIL_PRODUCER` makes that one step fail
+    # so the failure control can prove packaging is never reached.
+    CONTROLLED_ORCHESTRATOR = (
+        '#!/bin/sh\n'
+        'set -eu\n'
+        'script=""\n'
+        'package=""\n'
+        'while [ $# -gt 0 ]; do\n'
+        '  case "$1" in\n'
+        '    --package) package="$2"; shift 2 ;;\n'
+        '    -*) shift ;;\n'
+        '    *) [ -n "$script" ] || script="$1"; shift ;;\n'
+        '  esac\n'
+        'done\n'
+        'printf "%s\\n" "$script" > "$ROUTE_SCRIPT"\n'
+        'printf "%s\\n" "$package" > "$ROUTE_PACKAGE"\n'
+        'echo server-start >> "$ORDER_LOG"\n'
+        'i=0\n'
+        'while [ $i -lt 200 ]; do\n'
+        '  if [ -e "$PACKAGING_MARKER" ]; then echo concurrent >> "$ORDER_LOG"; break; fi\n'
+        '  i=$((i + 1))\n'
+        'done\n'
+        'if [ -n "${FAIL_PRODUCER:-}" ]; then\n'
+        '  echo server-failed >> "$ORDER_LOG"\n'
+        '  exit 3\n'
+        'fi\n'
+        'echo server-end >> "$ORDER_LOG"\n'
+        '[ -z "$package" ] || sh -c "$package"\n')
 
-        The controlled producer records whether the packaging step had already
-        started beside it. That is an observation, not a wait: a serialized
-        build simply never creates the packaging marker while it runs.
+    CONTROLLED_BUN = ('#!/bin/sh\nset -eu\ntouch "$PACKAGING_MARKER"\n'
+                      'echo tauri-start >> "$ORDER_LOG"\necho tauri-end >> "$ORDER_LOG"\n')
+
+    def build_order_fixture(self):
+        """The real Makefile bytes with the producer-bearing step controlled.
+
+        MIGRATION: the obsolete fixture wrote scripts/build-server.sh, but the
+        unchanged Makefile now routes `build` through
+        `$(PYTHON) -I tools/build_sidecar.py --package '<tauri command>'`. The
+        stand-in is therefore supplied through the Makefile's own PYTHON
+        variable, exactly as the bridge module's route control does. The recipe,
+        the route, the ordering and the assertions under test stay real; only
+        the expensive producer/consumer/artifact work is controlled.
         """
         fixture = self.root / 'repository'
         (fixture / 'scripts').mkdir(parents=True)
         (fixture / 'tauri').mkdir()
         (fixture / 'Makefile').write_bytes(MAKEFILE.read_bytes())
-        log = fixture / 'order.log'
-        packaging = fixture / 'packaging-started'
-        producer = fixture / 'scripts/build-server.sh'
-        producer.write_text(
-            '#!/bin/sh\n'
-            'set -eu\n'
-            'echo server-start >> "$ORDER_LOG"\n'
-            'i=0\n'
-            'while [ $i -lt 200 ]; do\n'
-            '  if [ -e "$PACKAGING_MARKER" ]; then echo concurrent >> "$ORDER_LOG"; break; fi\n'
-            '  i=$((i + 1))\n'
-            'done\n'
-            'echo server-end >> "$ORDER_LOG"\n', encoding='utf-8')
-        producer.chmod(0o755)
+        orchestrator = self.root / 'controlled-orchestrator'
+        orchestrator.write_text(self.CONTROLLED_ORCHESTRATOR, encoding='utf-8')
+        orchestrator.chmod(0o755)
         tools = self.root / 'tools'
         tools.mkdir()
         bun = tools / 'bun'
-        bun.write_text('#!/bin/sh\nset -eu\ntouch "$PACKAGING_MARKER"\n'
-                       'echo tauri-start >> "$ORDER_LOG"\necho tauri-end >> "$ORDER_LOG"\n',
-                       encoding='utf-8')
+        bun.write_text(self.CONTROLLED_BUN, encoding='utf-8')
         bun.chmod(0o755)
+        paths = {name: fixture / name for name in
+                 ('order.log', 'packaging-started', 'route-script', 'route-package')}
         environment = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'],
-                           ORDER_LOG=str(log), PACKAGING_MARKER=str(packaging))
-        result = subprocess.run(['/usr/bin/make', '-j4', 'build'], cwd=fixture, env=environment,
-                                capture_output=True, text=True, timeout=120)
+                           ORDER_LOG=str(paths['order.log']),
+                           PACKAGING_MARKER=str(paths['packaging-started']),
+                           ROUTE_SCRIPT=str(paths['route-script']),
+                           ROUTE_PACKAGE=str(paths['route-package']))
+        return fixture, orchestrator, paths, environment
+
+    def run_make_build(self, fixture, orchestrator, environment):
+        return subprocess.run(['/usr/bin/make', '-j4', 'build', 'PYTHON=' + str(orchestrator)],
+                              cwd=fixture, env=environment, capture_output=True,
+                              text=True, timeout=120)
+
+    def test_make_j_cannot_package_while_the_sidecar_is_being_published(self):
+        """The real Makefile with a controlled orchestrator and bun.
+
+        The controlled orchestrator records whether the packaging step had
+        already started beside it. That is an observation, not a wait: a
+        serialized build simply never creates the packaging marker while it
+        runs. It also records the route it was actually asked for, so this
+        cannot pass with a stand-in that ignores its arguments.
+        """
+        fixture, orchestrator, paths, environment = self.build_order_fixture()
+        result = self.run_make_build(fixture, orchestrator, environment)
         self.assertEqual(result.returncode, 0, result.stderr)
-        recorded = log.read_text().split()
+        recorded = paths['order.log'].read_text().split()
         self.assertNotIn('concurrent', recorded)
         self.assertEqual(recorded, ['server-start', 'server-end', 'tauri-start', 'tauri-end'])
+        # The requested route is the current one, and exactly one
+        # producer-bearing operation ran under it.
+        self.assertEqual(paths['route-script'].read_bytes(), b'tools/build_sidecar.py\n')
+        self.assertEqual(paths['route-package'].read_bytes(),
+                         b'cd tauri && bun run tauri build\n')
+        self.assertEqual(recorded.count('server-start'), 1)
+
+    def test_a_failed_producer_bearing_step_never_reaches_packaging(self):
+        """A failed producer-bearing step must stop the route before packaging.
+
+        Same real Makefile, same route and same controlled stand-ins; only the
+        single producer-bearing step fails. Nothing waits on a timer: the
+        packaging marker is created by the controlled bun, which must never run.
+        """
+        fixture, orchestrator, paths, environment = self.build_order_fixture()
+        environment['FAIL_PRODUCER'] = '1'
+        result = self.run_make_build(fixture, orchestrator, environment)
+        self.assertNotEqual(result.returncode, 0)
+        recorded = paths['order.log'].read_text().split()
+        self.assertEqual(recorded, ['server-start', 'server-failed'])
+        self.assertNotIn('tauri-start', recorded)
+        self.assertNotIn('tauri-end', recorded)
+        self.assertFalse(paths['packaging-started'].exists(),
+                         'packaging started despite a failed producer-bearing step')
+        # The route was still the real one, and it was requested exactly once.
+        self.assertEqual(paths['route-script'].read_bytes(), b'tools/build_sidecar.py\n')
+        self.assertEqual(recorded.count('server-start'), 1)
 
 
 if __name__ == '__main__':
