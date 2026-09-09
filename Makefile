@@ -115,14 +115,14 @@ build: ## Build everything (sidecar + verified resources + desktop app)
 # is told which build the gate passed for, so the Tauri hook verifies that work
 # instead of repeating the producer.
 build-sidecar-and-package:
-	$(PYTHON) -I tools/build_sidecar.py --package 'cd $(TAURI_DIR) && bun run tauri build'
+	$(PYTHON) -I -B tools/build_sidecar.py --package 'cd $(TAURI_DIR) && bun run tauri build'
 
 # The whole bridge: a new invocation identity, the clean product commit and
 # tree, every explicit selected input, one producer run, then the consumer --
 # and only then packaging. It refuses and explains rather than choosing inputs.
 build-sidecar: ## Build and verify the sidecar from explicit selected inputs
 	@echo -e "$(BLUE)Building the sidecar from explicit selected inputs...$(NC)"
-	$(PYTHON) -I tools/build_sidecar.py
+	$(PYTHON) -I -B tools/build_sidecar.py
 
 # Developer path: run the collector directly with inputs you name yourself. It
 # produces and publishes the pair but runs no consumer and prepares no Tauri
@@ -138,7 +138,7 @@ build-server: ## Collector only, explicit inputs (no consumer, not packageable)
 # it never invokes the producer, so running it costs no rebuild.
 sidecar-gate: ## Verify the installed sidecar identity and prepare Tauri resources
 	@echo -e "$(BLUE)Verifying the installed sidecar identity...$(NC)"
-	$(PYTHON) -I tools/tauri_build_gate.py
+	$(PYTHON) -I -B tools/tauri_build_gate.py
 
 # `bun run tauri build` runs the configured build hook, which is that gate, so
 # this target reaches it exactly once rather than duplicating the work.
@@ -198,11 +198,11 @@ check-kilix: ## Verify the provider-only Voicebox boundary
 		-u GIT_OBJECT_DIRECTORY -u GIT_QUARANTINE_PATH \
 		-u GIT_REPLACE_REF_BASE -u GIT_SHALLOW_FILE -u GIT_WORK_TREE \
 		GIT_NO_REPLACE_OBJECTS=1 git -C "$(CURDIR)" show \
-		HEAD:.kilix-import/verify_import.py | $(PYTHON) -I -S -)"; \
+		HEAD:.kilix-import/verify_import.py | $(PYTHON) -I -B -S -)"; \
 		[[ "$$bootstrap_output" == "VOICEBOX_CURATED_IMPORT: PASS ("* ]]; \
 		[[ "$$bootstrap_output" != *$$'\n'* ]]; \
 		printf '%s\n' "$$bootstrap_output"
-	uv run --frozen --isolated python -I -m unittest discover -s .kilix-import -p 'test_*.py' -v
+	uv run --frozen --isolated python -I -B -m unittest discover -s .kilix-import -p 'test_*.py' -v
 	uv run --frozen --isolated python -I tools/check_kilix_boundary.py
 	uv run --frozen --isolated python -I tools/check_import_inventory.py
 

@@ -143,7 +143,9 @@ def run_build(options):
 
     # The same identity this build generated, carried straight through. The
     # handoff the producer wrote is used as a cross-check, not as the authority.
-    gate = [sys.executable, '-I', str(ROOT / 'tools/prepare_sidecar_resources.py'),
+    # -B for the same reason as the gate's own orchestrator child: -I implies -E,
+    # so only the command line can keep bytecode out of the checkout.
+    gate = [sys.executable, '-I', '-B', str(ROOT / 'tools/prepare_sidecar_resources.py'),
             '--binary', str(options.binary_for(build_id)),
             '--provenance', str(options.provenance_for(build_id)),
             '--staged-inputs', str(stage / NOTICES),

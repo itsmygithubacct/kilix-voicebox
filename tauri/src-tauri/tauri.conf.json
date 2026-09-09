@@ -5,7 +5,7 @@
   "identifier": "sh.voicebox.app",
   "build": {
     "beforeDevCommand": "bun run dev",
-    "beforeBuildCommand": "sh -euc 'root=$PWD; while [ ! -f \"$root/tools/tauri_build_gate.py\" ]; do if [ \"$root\" = / ]; then echo \"voicebox: sidecar gate not found\" >&2; exit 1; fi; root=$(dirname \"$root\"); done; python3 -I \"$root/tools/tauri_build_gate.py\" && bun run build'",
+    "beforeBuildCommand": "sh -euc 'root=$PWD; while [ ! -f \"$root/tools/tauri_build_gate.py\" ]; do if [ \"$root\" = / ]; then echo \"voicebox: sidecar gate not found\" >&2; exit 1; fi; root=$(dirname \"$root\"); done; python3 -I -B \"$root/tools/tauri_build_gate.py\" && bun run build'",
     "frontendDist": "../dist",
     "devUrl": "http://localhost:5173"
   },

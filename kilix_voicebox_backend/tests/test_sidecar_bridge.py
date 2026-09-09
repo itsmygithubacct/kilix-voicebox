@@ -28,6 +28,11 @@ COLLECTOR = ROOT / 'scripts/build-server.sh'
 ORCHESTRATOR = ROOT / 'tools/build_sidecar.py'
 MAKEFILE = ROOT / 'Makefile'
 PLATFORM = 'x86_64-unknown-linux-gnu'
+# The ambient interpreter a developer would reach for, which is what these tests
+# are about -- but never without -B. `-I` implies `-E`, so PYTHONDONTWRITEBYTECODE
+# cannot reach the child, and a child that imports from tools/ writes
+# tools/__pycache__ straight into the checkout under test.
+AMBIENT_PYTHON = ['/usr/bin/python3', '-I', '-B']
 
 RUSTC = ("#!/bin/sh\nset -eu\ntest \"${1-}\" = -vV\n"
          "printf 'rustc 1.0.0\\nhost: %s\\n' '" + PLATFORM + "'\n")
@@ -258,7 +263,7 @@ class CollectorBridgeTests(unittest.TestCase):
 
 class OrchestrationRefusalTests(unittest.TestCase):
     def run_orchestrator(self, environment):
-        return subprocess.run(['/usr/bin/python3', '-I', str(ORCHESTRATOR)], cwd=ROOT,
+        return subprocess.run([*AMBIENT_PYTHON, str(ORCHESTRATOR)], cwd=ROOT,
                               check=False, capture_output=True, text=True, timeout=60,
                               env=environment)
 
@@ -292,7 +297,7 @@ class OrchestrationRefusalTests(unittest.TestCase):
                   % str(ROOT / 'tools'))
         seen = set()
         for _ in range(3):
-            result = subprocess.run(['/usr/bin/python3', '-I', '-c', script], cwd=ROOT,
+            result = subprocess.run([*AMBIENT_PYTHON, '-c', script], cwd=ROOT,
                                     check=False, capture_output=True, text=True, timeout=60)
             self.assertEqual(result.returncode, 0, result.stderr)
             seen.add(result.stdout.strip())

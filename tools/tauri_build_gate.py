@@ -98,7 +98,10 @@ def main(argv=None):
     # A standalone Tauri release build reaches the same safe path: it runs the
     # whole bridge itself rather than packaging whatever is already installed.
     # Without explicit inputs it refuses; it never falls back to stale outputs.
-    orchestrator = [sys.executable, '-I', str(ROOT / 'tools/build_sidecar.py')]
+    # -B, not the environment: -I implies -E, so PYTHONDONTWRITEBYTECODE cannot
+    # reach this child, and a child that imports from tools/ would otherwise
+    # write tools/__pycache__ into the checkout it is verifying.
+    orchestrator = [sys.executable, '-I', '-B', str(ROOT / 'tools/build_sidecar.py')]
     if options.platform:
         orchestrator += ['--platform', options.platform]
     # Nothing about a spent or foreign capability may leak into the build the
