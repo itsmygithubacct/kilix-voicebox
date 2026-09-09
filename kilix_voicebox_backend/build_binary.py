@@ -478,8 +478,8 @@ def _python(home: Path, population: Population, watches: dict) -> dict:
 
 def _host_tools(population: Population, watches: dict) -> list[dict]:
     # Fixed bootstrap/binutils/shell utilities; no PATH-selected tool execution.
-    selected = ["/usr/bin/bwrap", "/usr/bin/readelf", "/usr/bin/objdump", "/usr/bin/ldd",
-                "/usr/bin/bash", "/usr/sbin/ldconfig", "/usr/bin/env", "/usr/bin/readlink",
+    selected = ["/usr/bin/bwrap", "/usr/bin/readelf", "/usr/bin/objdump", "/usr/bin/objcopy",
+                "/usr/bin/ldd", "/usr/bin/bash", "/usr/sbin/ldconfig", "/usr/bin/env", "/usr/bin/readlink",
                 "/usr/bin/dirname", "/usr/bin/uname", "/usr/bin/grep", "/usr/bin/sed",
                 "/usr/bin/head", "/usr/bin/cut", "/usr/bin/dash", "/etc/ld.so.cache"]
     names = {}
