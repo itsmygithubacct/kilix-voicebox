@@ -28,6 +28,29 @@ TARGET = {
     'python_full_version': '3.12.8',
 }
 FROZEN_LOCK_SHA256 = 'c32006e700bde9801f6e427d2c1370f6ff3a1bb6b7259e2468c414345de89aa6'
+WATCHED_IMPORTS = ('packaging', 'torch', 'onnxruntime', 'PyInstaller', 'fastapi')
+
+# `sys.modules` in THIS process also holds whatever every other test module
+# imported when the suite loaded them, and four of them -- test_capture_queue,
+# test_capture_delivery, test_capture_cleanup and test_kilix_boundary -- import
+# fastapi at module scope. Absolute absence is therefore a claim about the whole
+# process, not about the consumer, and it is false in any run that loads the
+# whole suite into one interpreter. This probe asks a clean child what IT
+# imported while running the consumer, which is the property being claimed.
+IMPORT_PROBE = (
+    'import json, runpy, sys\n'
+    'watched = ' + repr(WATCHED_IMPORTS) + '\n'
+    'target = sys.argv[1]\n'
+    'sys.argv = sys.argv[1:]\n'
+    'before = sorted(name for name in watched if name in sys.modules)\n'
+    'status = 0\n'
+    'try:\n'
+    "    runpy.run_path(target, run_name='__main__')\n"
+    'except SystemExit as stop:\n'
+    '    status = 0 if stop.code is None else stop.code\n'
+    'after = sorted(name for name in watched if name in sys.modules)\n'
+    "sys.stderr.write('PROBE ' + json.dumps("
+    "{'before': before, 'after': after, 'status': status}) + chr(10))\n")
 
 
 def marker_matches(expression):
@@ -276,10 +299,54 @@ class LockedDistributionTests(unittest.TestCase):
                     else:
                         self.assertEqual(json.loads(result.stdout)['status'], 'verified')
 
+    def probe_child_imports(self, target, arguments, cwd):
+        """What a clean child imported while running `target`, reported by that child."""
+        result = subprocess.run([sys.executable, '-I', '-B', '-c', IMPORT_PROBE,
+                                 str(target), *arguments], cwd=str(cwd),
+                                capture_output=True, text=True, timeout=30)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        reports = [line for line in result.stderr.splitlines() if line.startswith('PROBE ')]
+        self.assertEqual(len(reports), 1, result.stderr)
+        return json.loads(reports[0][len('PROBE '):])
+
     def test_consumer_does_not_import_ambient_packaging_or_target_packages(self):
+        # In-process, the honest property is that validating ADDS none of them;
+        # what the process already imported is not this consumer's doing.
+        before = {name for name in WATCHED_IMPORTS if name in sys.modules}
         self.validate()
-        for name in ('packaging', 'torch', 'onnxruntime', 'PyInstaller', 'fastapi'):
-            self.assertNotIn(name, sys.modules)
+        self.assertEqual({name for name in WATCHED_IMPORTS if name in sys.modules}, before)
+        with tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR')) as temp:
+            root = Path(temp)
+            with self.subTest(arm='the probe can report a watched import'):
+                # Without this the arm below would pass by construction: a probe
+                # that never reports a name proves nothing about the consumer.
+                planted = root / 'plants_a_watched_name.py'
+                planted.write_text('import sys, types\n'
+                                   "sys.modules['packaging'] = types.ModuleType('packaging')\n",
+                                   encoding='utf-8')
+                control = self.probe_child_imports(planted, [], root)
+                self.assertEqual(control['before'], [])
+                self.assertEqual(control['after'], ['packaging'])
+            with self.subTest(arm='the consumer imports none of them'):
+                binary, provenance, lock = (root / n for n in ('sidecar', 'record.json', 'uv.lock'))
+                binary.write_bytes(self.fixture.binary)
+                binary.chmod(0o600)
+                raw = UV_LOCK.read_bytes()
+                lock.write_bytes(raw)
+                record = copy.deepcopy(self.fixture.record)
+                record['uv_lock_sha256'] = sha(raw)
+                provenance.write_bytes(canonical(record))
+                observed = self.probe_child_imports(
+                    ROOT / 'tools/verify_sidecar_provenance.py',
+                    ['--binary', str(binary), '--provenance', str(provenance),
+                     '--input-manifest', str(MANIFEST), '--uv-lock', str(lock),
+                     '--build-id', BUILD_ID, '--source-commit', SOURCE_COMMIT,
+                     '--source-tree', SOURCE_TREE], root)
+                # A refusal would satisfy the import claim without ever running
+                # the consumer, so the verified status is part of the property.
+                self.assertEqual(observed['status'], 0)
+                self.assertEqual(observed['before'], [])
+                self.assertEqual(observed['after'], [])
 
 
 if __name__ == '__main__':
