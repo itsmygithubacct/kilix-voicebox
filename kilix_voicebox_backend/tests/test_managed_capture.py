@@ -14,10 +14,10 @@ from unittest.mock import patch
 import uuid
 import wave
 
-from voicelib import audio
 from kilix_voicebox_backend.managed_capture import (
     CaptureBridge, CaptureRefusal, transcribe_owned, until_disconnected,
 )
+from .voice_optional import VOICE_MICROPHONE_AVAILABLE, audio
 
 PEER = str(Path(__file__).with_name("capture_peer.py"))
 
@@ -30,6 +30,7 @@ def wait_for(predicate, seconds=4):
         time.sleep(0.01)
 
 
+@unittest.skipUnless(VOICE_MICROPHONE_AVAILABLE, "managed voice microphone API is not installed")
 class ManagedCaptureTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()

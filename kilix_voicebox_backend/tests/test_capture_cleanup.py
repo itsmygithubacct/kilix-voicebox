@@ -12,11 +12,12 @@ import unittest
 from unittest.mock import patch
 
 from fastapi import HTTPException
-from voicelib import audio
 from kilix_voicebox_backend import main, managed_capture as capture
 from .test_capture_queue import PEER, Request, reached
+from .voice_optional import VOICE_MICROPHONE_AVAILABLE, audio
 
 
+@unittest.skipUnless(VOICE_MICROPHONE_AVAILABLE, "managed voice microphone API is not installed")
 class CaptureCleanupTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="vbc-")

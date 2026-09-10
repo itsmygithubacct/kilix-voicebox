@@ -33,6 +33,7 @@ import unittest
 import uuid
 
 from .test_managed_capture import PEER, wait_for
+from .voice_optional import VOICE_MICROPHONE_AVAILABLE
 
 # Bounded retained diagnostics. A readiness failure writes one JSON file here
 # and names it on stderr; the directory is outside the fixture's own temporary
@@ -57,8 +58,15 @@ class CaptureHTTPTests(unittest.TestCase):
         with socket.socket() as port:
             port.bind(('127.0.0.1', 0))
             self.port = port.getsockname()[1]
+        # The server child is python -B, not unittest -t ., and the project is
+        # not an installed uv package. Give it the repo root so
+        # kilix_voicebox_backend imports without requiring voicelib.
+        pythonpath = os.pathsep.join(
+            part for part in (str(Path(__file__).resolve().parents[2]),
+                              os.environ.get("PYTHONPATH", "")) if part)
         environment = {**os.environ, 'KILIX_VOICEBOX_SESSION_TOKEN': self.token,
-                       'XDG_RUNTIME_DIR': str(self.root)}
+                       'XDG_RUNTIME_DIR': str(self.root),
+                       'PYTHONPATH': pythonpath}
         self.log = tempfile.TemporaryFile()
         self.addCleanup(self.log.close)
         self.server = subprocess.Popen([sys.executable, '-B', PEER, 'server', str(self.root), str(self.port)],
@@ -292,6 +300,7 @@ class CaptureHTTPTests(unittest.TestCase):
         self.assertFalse((self.root / 'tree.json').exists())
         self.assertFalse((self.root / 'leases').exists())
 
+    @unittest.skipUnless(VOICE_MICROPHONE_AVAILABLE, "managed voice microphone API is not installed")
     def test_stop_proof_precedes_wav_and_stale_id_refuses(self):
         identifier, connection, tree = self.begin()
         self.assertEqual(self.request('/recording/status')[1]['id'], identifier)
@@ -304,11 +313,13 @@ class CaptureHTTPTests(unittest.TestCase):
         self.completed(identifier, tree)
         self.assertFalse(list((self.root / 'data/privacy').glob('profiles/*/samples/*')))
 
+    @unittest.skipUnless(VOICE_MICROPHONE_AVAILABLE, "managed voice microphone API is not installed")
     def test_original_http_disconnect_reaps_and_discards(self):
         identifier, connection, tree = self.begin()
         connection.close()
         self.completed(identifier, tree)
 
+    @unittest.skipUnless(VOICE_MICROPHONE_AVAILABLE, "managed voice microphone API is not installed")
     def test_cancel_does_not_deliver_recorded_audio(self):
         identifier, connection, tree = self.begin()
         self.assertEqual(self.request(f'/recording/{identifier}/cancel', method='POST')[0], 200)
@@ -318,12 +329,14 @@ class CaptureHTTPTests(unittest.TestCase):
         self.assertNotIn(str(self.root).encode(), payload)
         self.completed(identifier, tree)
 
+    @unittest.skipUnless(VOICE_MICROPHONE_AVAILABLE, "managed voice microphone API is not installed")
     def test_actual_lock_authority_change_stops_existing_request(self):
         identifier, connection, tree = self.begin()
         (self.root / 'locked').touch()
         self.assertEqual(self.response(connection)[0], 409)
         self.completed(identifier, tree)
 
+    @unittest.skipUnless(VOICE_MICROPHONE_AVAILABLE, "managed voice microphone API is not installed")
     def test_natural_limit_stops_without_a_control_client(self):
         identifier, connection, tree = self.begin()
         self.assertEqual(self.response(connection)[0], 200)

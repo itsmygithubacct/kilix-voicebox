@@ -14,8 +14,8 @@ import unittest
 from unittest.mock import patch
 
 from fastapi import HTTPException
-from voicelib import audio
 from kilix_voicebox_backend import main, managed_capture as capture
+from .voice_optional import VOICE_MICROPHONE_AVAILABLE, audio
 
 PEER = str(Path(__file__).with_name("capture_peer.py"))
 
@@ -35,6 +35,7 @@ async def reached(predicate, seconds=2):
         await asyncio.sleep(.005)
 
 
+@unittest.skipUnless(VOICE_MICROPHONE_AVAILABLE, "managed voice microphone API is not installed")
 class CaptureQueueTests(unittest.TestCase):
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(prefix="vbq-")
