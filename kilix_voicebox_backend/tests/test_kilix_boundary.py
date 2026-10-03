@@ -1312,6 +1312,7 @@ class OrchestratorTests(unittest.TestCase):
                 value, descriptors = receive_message(channel)
                 output_file = None
                 try:
+                    self.assertEqual(value["extensions"], {"x_require_installed_asset_v1": True})
                     self.assertEqual(len(descriptors), 1)
                     self.assertEqual(
                         fcntl.fcntl(descriptors[0], fcntl.F_GETFL) & os.O_ACCMODE,

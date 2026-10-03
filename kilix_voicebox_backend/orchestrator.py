@@ -268,6 +268,7 @@ class VoiceboxOrchestrator:
             "op": "submit",
             "job_id": job_id,
             "deadline_ms": 3_600_000,
+            "extensions": {"x_require_installed_asset_v1": True},
             "args": args,
         }
         descriptor = _memory_descriptor(pcm, self.store.root)
@@ -321,7 +322,8 @@ class VoiceboxOrchestrator:
         job_id = f"voicebox-{generation_id}"
         request = {"schema": self.qwen.endpoint.schema, "type": "request",
                    "request_id": uuid.uuid4().hex, "op": "submit", "job_id": job_id,
-                   "deadline_ms": 3_600_000, "args": arguments}
+                   "deadline_ms": 3_600_000,
+                   "extensions": {"x_require_installed_asset_v1": True}, "args": arguments}
         request_digest = hashlib.sha256(json.dumps(arguments, sort_keys=True,
                                                   separators=(",", ":")).encode()).hexdigest()
         with self.qwen.request(request) as reply:

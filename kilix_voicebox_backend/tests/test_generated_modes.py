@@ -50,6 +50,7 @@ class GeneratedModesTests(unittest.TestCase):
 
     def reply(self, request, descriptor=None):
         self.assertIsNone(descriptor)
+        self.assertEqual(request["extensions"], {"x_require_installed_asset_v1": True})
         arguments = request["args"]
         self.sent.append(arguments)
         mode = arguments["mode"]
