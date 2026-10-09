@@ -82,8 +82,8 @@ def verified_frontend(source, bun, parent):
                        'XDG_CACHE_HOME': str(work / 'cache'), 'TMPDIR': str(work / 'tmp'), 'LC_ALL': 'C.UTF-8'}
         lock = (fresh / 'bun.lock').read_bytes()
         command = [str(bun), 'install', '--frozen-lockfile', '--ignore-scripts', '--no-cache',
-                   '--cache-dir', str(work / 'cache'), '--backend', 'copyfile', '--linker', 'hoisted',
-                   '--registry', 'https://registry.npmjs.org', '--config', str(configuration)]
+                   '--cache-dir=' + str(work / 'cache'), '--backend=copyfile', '--linker=hoisted',
+                   '--registry=https://registry.npmjs.org', '--config=' + str(configuration)]
         # The pinned Bun's default verifies newly downloaded lock integrity. The
         # cache starts empty; no --no-verify or dependency lifecycle script runs.
         subprocess.run(command, cwd=fresh, env=environment, check=True)
