@@ -89,7 +89,8 @@ const routeTree = rootRoute.addChildren([
 ]);
 
 // Create router
-export const router = createRouter({ routeTree });
+export const router = createRouter({ routeTree,
+  basepath: window.location.pathname.startsWith('/ui/') ? '/ui' : '/' });
 
 // Register router for type safety
 declare module '@tanstack/react-router' {

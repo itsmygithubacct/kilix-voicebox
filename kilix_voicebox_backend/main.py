@@ -47,6 +47,65 @@ MAX_AVATAR_BYTES = 10 * 1024 * 1024
 SESSION_HEADER = "x-kilix-voicebox-session"
 _SESSION_TOKEN_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _session_token: str | None = None
+_installed_origin: str | None = None
+_installed_ui: Path | None = None
+_installed_assets: dict[str, bytes] = {}
+
+
+def configure_installed_ui(directory: Path, port: int) -> None:
+    """Select only verified public assets; credentials and product data stay private."""
+    global _installed_origin, _installed_ui, _installed_assets
+    if not directory.is_dir() or not 1 <= port <= 65535:
+        raise ValueError("invalid installed UI")
+    assets = {}
+    total = 0
+    for parent, dirs, names in os.walk(directory, followlinks=False):
+        if any((Path(parent) / name).is_symlink() for name in dirs):
+            raise ValueError('linked UI directory')
+        for name in names:
+            file = Path(parent) / name
+            fd = os.open(file, os.O_RDONLY | os.O_NOFOLLOW | os.O_CLOEXEC | os.O_NONBLOCK)
+            try:
+                info = os.fstat(fd)
+                if not stat.S_ISREG(info.st_mode) or not 0 <= info.st_size <= 16 * 1024**2:
+                    raise ValueError('invalid UI asset')
+                with os.fdopen(os.dup(fd), 'rb') as source:
+                    raw = source.read(info.st_size + 1)
+                if len(raw) != info.st_size:
+                    raise ValueError('UI asset changed')
+                total += len(raw)
+                if total > 64 * 1024**2:
+                    raise ValueError('UI population exceeds bound')
+                assets[file.relative_to(directory).as_posix()] = raw
+            finally:
+                os.close(fd)
+    if 'index.html' not in assets:
+        raise ValueError('UI entrypoint missing')
+    _installed_assets = assets
+    _installed_origin = f"http://127.0.0.1:{port}"
+    _installed_ui = directory
+
+
+@app.get('/ui/{asset:path}')
+async def installed_ui(asset: str):
+    import mimetypes
+    if _installed_ui is None:
+        raise HTTPException(404)
+    parts = asset.split('/')
+    if any(p in {'.', '..'} for p in parts) or '\\' in asset:
+        raise HTTPException(404)
+    name = asset
+    if asset in {'', 'voices', 'stories', 'audio', 'models', 'server'}:
+        name = 'index.html'
+    if name not in _installed_assets:
+        raise HTTPException(404)
+    return Response(_installed_assets[name], media_type=mimetypes.guess_type(name)[0] or 'application/octet-stream', headers={
+        'Cache-Control': 'no-store', 'Referrer-Policy': 'no-referrer',
+        'X-Content-Type-Options': 'nosniff',
+        'Content-Security-Policy': "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data: blob:; media-src 'self' blob:; font-src 'self' data:; "
+            "connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'",
+    })
 
 
 def configure_session_token(value: str) -> None:
@@ -171,7 +230,12 @@ def _media_credential(request: Request) -> str | None:
 async def enforce_session_credential(request: Request, call_next):
     """Require the per-process credential on every application request."""
 
-    if request.method == "OPTIONS" and request.headers.get("origin") in ALLOWED_PRODUCT_ORIGINS:
+    # The installed UI is a public immutable shell. It contains no credential,
+    # data, or authenticated bootstrap endpoint. Every API/media request below
+    # still requires the fresh launch secret.
+    if _installed_ui is not None and request.method in {'GET', 'HEAD'} and request.url.path.startswith('/ui/'):
+        return await call_next(request)
+    if request.method == "OPTIONS" and request.headers.get("origin") in ALLOWED_PRODUCT_ORIGINS | {_installed_origin}:
         return await call_next(request)
     expected = _session_token
     provided = request.headers.get(SESSION_HEADER) or _media_credential(request)
@@ -192,7 +256,7 @@ async def enforce_session_credential(request: Request, call_next):
 async def enforce_product_origin(request: Request, call_next):
     """Reject browser origins outside the fixed desktop and development surfaces."""
     origin = request.headers.get("origin")
-    if origin is not None and origin not in ALLOWED_PRODUCT_ORIGINS:
+    if origin is not None and origin not in ALLOWED_PRODUCT_ORIGINS | {_installed_origin}:
         return JSONResponse(
             status_code=403,
             content={"detail": {"code": "ORIGIN_FORBIDDEN"}},
@@ -669,8 +733,15 @@ def _voice_orchestrator() -> VoiceboxOrchestrator:
 async def generate_speech(
     data: models.GenerationRequest,
     db: Session = Depends(get_db),
+    request: Request = None,
 ):
     """Generate speech from text using a voice profile."""
+    gone = threading.Event()
+    async def owned(function):
+        if request is None:
+            return await asyncio.to_thread(function)
+        return await until_disconnected(request, function, gone,
+                                        stopped_code='GENERATION_CANCELED')
     try:
         # Get profile
         profile = await profiles.get_profile(data.profile_id, db)
@@ -681,8 +752,7 @@ async def generate_speech(
             # Only cloning resolves a consented sample. Named/design modes
             # retain the profile as a history collection without reading it.
             prompt = await profiles.create_voice_prompt_for_profile(data.profile_id, db)
-            generated = await asyncio.to_thread(
-                _voice_orchestrator().synthesize_clone,
+            generated = await owned(lambda: _voice_orchestrator().synthesize_clone(
                 profile_id=data.profile_id,
                 sample_path=Path(prompt["audio_path"]),
                 text=data.text,
@@ -690,14 +760,15 @@ async def generate_speech(
                 consent_asserted=data.consent_asserted,
                 instruction=data.instruct,
                 seed=data.seed,
-            )
+                cancelled=gone.is_set,
+            ))
         else:
-            generated = await asyncio.to_thread(
-                _voice_orchestrator().synthesize_generated,
+            generated = await owned(lambda: _voice_orchestrator().synthesize_generated(
                 mode=data.mode, text=data.text, language=data.language,
                 voice_id=data.voice_id, description=data.description,
                 instruction=data.instruct, seed=data.seed,
-            )
+                cancelled=gone.is_set,
+            ))
         audio_path = config.get_privacy_dir() / "generations" / generated["stored_name"]
         duration = generated["duration_ms"] / 1000
 
@@ -728,7 +799,7 @@ async def generate_speech(
         raise
     except (ValueError, StoreError):
         raise HTTPException(status_code=400, detail={"code": "GENERATION_INVALID"}) from None
-    except ProviderError as e:
+    except (ProviderError, CaptureRefusal) as e:
         status_code = 409 if e.code in {"CONSENT_REQUIRED", "MODEL_MISSING", "RUNTIME_UNSELECTED"} else 503
         raise HTTPException(status_code=status_code, detail={"code": e.code}) from None
     except Exception:
@@ -1358,6 +1429,11 @@ async def get_model_status():
     """Render provider-reported installed models; never inspect mutable caches."""
     populations = await asyncio.gather(tts.models(), transcribe.models(), return_exceptions=True)
     statuses = []
+    catalog = {}
+    if _installed_ui is not None:
+        import json
+        data = json.loads((_installed_ui.parent / 'content-catalog.json').read_text())
+        catalog = {row['id']: row for row in data['assets'] if row.get('provider') in {'kilix-qwen-tts', 'kilix-transcribe'}}
     for provider, population in zip(("kilix-qwen-tts", "kilix-transcribe"), populations):
         if isinstance(population, Exception):
             continue
@@ -1366,6 +1442,9 @@ async def get_model_status():
             display_name = model.get("display_name", model_id)
             if type(model_id) is not str or type(display_name) is not str:
                 continue
+            selected = catalog.get(model_id, {})
+            sizes = selected.get('sizes', {})
+            license_rows = selected.get('licenses', [])
             statuses.append(models.ModelStatus(
                 provider=provider,
                 model_id=model_id,
@@ -1376,7 +1455,21 @@ async def get_model_status():
                     if type(model.get("installed_bytes")) is int else None
                 ),
                 resident=bool(model.get("loaded", False)),
+                model_revision=model.get('revision') if type(model.get('revision')) is str else None,
+                asset_authority=model.get('asset_authority') if type(model.get('asset_authority')) is str else None,
+                capabilities=[v for v in model.get('capabilities', []) if type(v) is str],
+                release_qualified=model.get('release_qualified') is True,
+                license_id=license_rows[0]['id'] if license_rows else None,
+                download_bytes=sizes.get('download_bytes'), temporary_bytes=sizes.get('temporary_bytes'),
             ))
+    reported = {row.model_id for row in statuses}
+    for model_id, selected in catalog.items():
+        if model_id not in reported:
+            sizes = selected['sizes']
+            statuses.append(models.ModelStatus(provider=selected['provider'], model_id=model_id,
+                display_name=selected['label'], installed=False, model_revision=selected['version'],
+                installed_bytes=sizes['installed_bytes'], download_bytes=sizes['download_bytes'],
+                temporary_bytes=sizes['temporary_bytes'], license_id=selected['licenses'][0]['id']))
     return models.ModelStatusListResponse(models=statuses)
 
 

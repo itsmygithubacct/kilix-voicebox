@@ -19,10 +19,13 @@ export const useServerStore = create<ServerStore>()((set) => ({
   serverUrl: LOCAL_SERVER_URL,
   sessionToken: import.meta.env.VITE_VOICEBOX_SESSION_TOKEN ?? '',
   setServerSession: (session) => {
-    if (session.url !== LOCAL_SERVER_URL || !/^[0-9a-f]{64}$/.test(session.token)) {
+    const installed = window.location.pathname.startsWith('/ui/');
+    const expected = installed ? window.location.origin : LOCAL_SERVER_URL;
+    if (session.url !== expected || !/^http:\/\/127\.0\.0\.1:[1-9][0-9]{0,4}$/.test(expected)
+        || !/^[0-9a-f]{64}$/.test(session.token)) {
       throw new Error('VOICEBOX_SESSION_INVALID');
     }
-    set({ serverUrl: LOCAL_SERVER_URL, sessionToken: session.token });
+    set({ serverUrl: expected, sessionToken: session.token });
   },
 
   isConnected: false,

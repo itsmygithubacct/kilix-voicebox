@@ -22,6 +22,7 @@ import {
 import { Textarea } from '@/components/ui/textarea';
 import { LANGUAGE_OPTIONS } from '@/lib/constants/languages';
 import { useGenerationForm } from '@/lib/hooks/useGenerationForm';
+import { useGenerationStore } from '@/stores/generationStore';
 import { useProfile } from '@/lib/hooks/useProfiles';
 import { useUIStore } from '@/stores/uiStore';
 import { VoiceModeFields } from './VoiceModeFields';
@@ -192,6 +193,9 @@ export function GenerationForm() {
                 'Generate Speech'
               )}
             </Button>
+            {isPending && <Button type="button" variant="outline" onClick={() => useGenerationStore.getState().cancelGeneration?.()}>
+              Cancel generation
+            </Button>}
           </form>
         </Form>
       </CardContent>

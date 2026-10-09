@@ -223,8 +223,9 @@ class ApiClient {
   }
 
   // Generation
-  async generateSpeech(data: GenerationRequest): Promise<GenerationResponse> {
+  async generateSpeech(data: GenerationRequest, signal?: AbortSignal): Promise<GenerationResponse> {
     return this.request<GenerationResponse>('/generate', {
+      signal,
       method: 'POST',
       body: JSON.stringify(data),
     });

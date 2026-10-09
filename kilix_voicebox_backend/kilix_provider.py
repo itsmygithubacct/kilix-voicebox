@@ -14,6 +14,7 @@ import json
 import math
 import os
 import socket
+import select
 import stat
 import struct
 import time
@@ -331,7 +332,7 @@ class ProviderClient:
                 channel.close()
             raise ProviderError("PROVIDER_UNAVAILABLE") from error
 
-    def request(self, value: dict[str, Any], descriptor: int | None = None) -> ProviderReply:
+    def request(self, value: dict[str, Any], descriptor: int | None = None, *, cancelled=None) -> ProviderReply:
         _require(value.get("schema") == self.endpoint.schema, "INCOMPATIBLE_PROTOCOL")
         request_id = value.get("request_id")
         _require(type(request_id) is str and bool(request_id), "INVALID_REQUEST")
@@ -347,6 +348,12 @@ class ProviderClient:
             for _index in range(MAX_EVENTS):
                 remaining = deadline - time.monotonic()
                 _require(remaining > 0, "DEADLINE_EXCEEDED")
+                if cancelled is not None:
+                    while not select.select([channel], [], [], min(0.05, remaining))[0]:
+                        _require(not cancelled(), 'CANCELED')
+                        remaining = deadline - time.monotonic()
+                        _require(remaining > 0, 'DEADLINE_EXCEEDED')
+                    _require(not cancelled(), 'CANCELED')
                 channel.settimeout(min(self.timeout, remaining))
                 try:
                     event, descriptors = receive_message(channel)
@@ -373,6 +380,9 @@ class ProviderClient:
                     code = error.get("code") if type(error) is dict else None
                     raise ProviderError(code if type(code) is str and bool(code) else "PROVIDER_ERROR")
                 if kind in {"result", "hello", "models", "status", "unloaded", "canceled"}:
+                    if cancelled is not None and cancelled():
+                        _close_all(descriptors)
+                        raise ProviderError('CANCELED')
                     return ProviderReply(event, descriptors)
                 _close_all(descriptors)
                 _require(kind in {"accepted", "queued", "loading", "progress", "chunk"},

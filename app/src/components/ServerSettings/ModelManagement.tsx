@@ -42,6 +42,15 @@ export function ModelManagement() {
                 <p className="text-xs text-muted-foreground">
                   {model.provider} · {model.model_id}
                 </p>
+                {model.model_revision && <p className="text-xs break-all">Revision: {model.model_revision}</p>}
+                <p className="text-xs text-muted-foreground">
+                  {model.license_id ?? 'Terms are shown by Kilix Content'}
+                  {model.download_bytes != null && ` · Download ${(model.download_bytes / 1024 ** 3).toFixed(2)} GiB`}
+                  {model.temporary_bytes != null && ` · Temporary ${(model.temporary_bytes / 1024 ** 3).toFixed(2)} GiB`}
+                </p>
+                <p className="text-xs">{model.asset_authority === 'kilix-content'
+                  ? 'Content authority selected; receipt and bytes are checked for every job.'
+                  : 'No current Content admission reported.'} {model.release_qualified ? 'Qualified profile' : 'Profile qualification pending'}</p>
               </div>
               <div className="flex gap-2">
                 <Badge variant={model.installed ? 'secondary' : 'outline'}>
@@ -58,6 +67,13 @@ export function ModelManagement() {
           </p>
         )}
       </CardContent>
+      <p className="px-6 pb-6 text-sm text-muted-foreground">
+        Select the matching model with Voice source: Base for a consented sample, CustomVoice for a built-in voice,
+        or VoiceDesign for a description. Use Kilix Content to review full model terms and size before agreeing;
+        then explicitly prepare and start the shared provider. Model agreement does not grant sample consent.
+        CustomVoice 0.6B and Base do not support generation instructions. Transcription uses the installed Tiny profile;
+        this package does not claim diarization or live transcript updates.
+      </p>
     </Card>
   );
 }

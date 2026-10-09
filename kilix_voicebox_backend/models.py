@@ -173,6 +173,13 @@ class ModelStatus(BaseModel):
     installed: bool
     resident: bool = False
     installed_bytes: Optional[int] = None
+    model_revision: Optional[str] = None
+    asset_authority: Optional[str] = None
+    capabilities: List[str] = Field(default_factory=list)
+    release_qualified: bool = False
+    license_id: Optional[str] = None
+    download_bytes: Optional[int] = None
+    temporary_bytes: Optional[int] = None
 
 
 class ModelStatusListResponse(BaseModel):

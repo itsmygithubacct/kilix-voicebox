@@ -100,6 +100,13 @@ export interface ModelStatus {
   installed: boolean;
   resident: boolean;
   installed_bytes?: number;
+  model_revision?: string;
+  asset_authority?: string;
+  capabilities?: string[];
+  release_qualified?: boolean;
+  license_id?: string;
+  download_bytes?: number;
+  temporary_bytes?: number;
 }
 
 export interface ModelStatusListResponse {

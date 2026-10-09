@@ -220,6 +220,7 @@ class VoiceboxOrchestrator:
         consent_asserted: bool,
         instruction: str | None = None,
         seed: int | None = None,
+        cancelled=None,
     ) -> dict[str, Any]:
         text = _text(text, MAX_TEXT_BYTES, "INVALID_TEXT")
         language = _text(language, 64, "INVALID_LANGUAGE")
@@ -273,7 +274,7 @@ class VoiceboxOrchestrator:
         }
         descriptor = _memory_descriptor(pcm, self.store.root)
         try:
-            reply = self.qwen.request(request, descriptor)
+            reply = self.qwen.request(request, descriptor, **({'cancelled': cancelled} if cancelled is not None else {}))
         finally:
             os.close(descriptor)
         return self._commit_synthesis_reply(
@@ -295,6 +296,7 @@ class VoiceboxOrchestrator:
         description: str | None = None,
         instruction: str | None = None,
         seed: int | None = None,
+        cancelled=None,
     ) -> dict[str, Any]:
         """Use a model's built-in voice or design mode without a sample upload."""
         _require(type(mode) is str and mode in {"named_voice", "voice_design"},
@@ -326,7 +328,7 @@ class VoiceboxOrchestrator:
                    "extensions": {"x_require_installed_asset_v1": True}, "args": arguments}
         request_digest = hashlib.sha256(json.dumps(arguments, sort_keys=True,
                                                   separators=(",", ":")).encode()).hexdigest()
-        with self.qwen.request(request) as reply:
+        with self.qwen.request(request, **({'cancelled': cancelled} if cancelled is not None else {})) as reply:
             _require(reply.payload.get("type") == "result" and len(reply.descriptors) == 1,
                      "INVALID_RESPONSE")
             result = reply.payload.get("result")

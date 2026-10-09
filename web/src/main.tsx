@@ -5,6 +5,7 @@ import App from '../../app/src/App';
 import '../../app/src/index.css';
 import { PlatformProvider } from '../../app/src/platform/PlatformContext';
 import { webPlatform } from './platform';
+import { useServerStore } from '../../app/src/stores/serverStore';
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -17,7 +18,16 @@ const queryClient = new QueryClient({
   },
 });
 
-ReactDOM.createRoot(document.getElementById('root')!).render(
+async function start() {
+  const root = ReactDOM.createRoot(document.getElementById('root')!);
+  try {
+    const session = await webPlatform.lifecycle.startServer();
+    useServerStore.getState().setServerSession(session);
+  } catch {
+    root.render(<p role="alert">Voicebox could not authenticate this window. Close it and reopen Voicebox.</p>);
+    return;
+  }
+  root.render(
   <React.StrictMode>
     <QueryClientProvider client={queryClient}>
       <PlatformProvider platform={webPlatform}>
@@ -26,3 +36,6 @@ ReactDOM.createRoot(document.getElementById('root')!).render(
     </QueryClientProvider>
   </React.StrictMode>,
 );
+}
+
+void start();

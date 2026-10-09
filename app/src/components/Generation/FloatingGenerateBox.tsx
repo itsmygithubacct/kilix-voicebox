@@ -21,6 +21,7 @@ import { useAddStoryItem, useStory } from '@/lib/hooks/useStories';
 import { cn } from '@/lib/utils/cn';
 import { useStoryStore } from '@/stores/storyStore';
 import { useUIStore } from '@/stores/uiStore';
+import { useGenerationStore } from '@/stores/generationStore';
 import { VoiceModeFields } from './VoiceModeFields';
 
 interface FloatingGenerateBoxProps {
@@ -313,6 +314,9 @@ export function FloatingGenerateBox({
                       <Sparkles className="h-4 w-4" />
                     )}
                   </Button>
+                  {isPending && <Button type="button" variant="outline" onClick={() => useGenerationStore.getState().cancelGeneration?.()}>
+                    Cancel generation
+                  </Button>}
                   <span className="pointer-events-none absolute bottom-full left-1/2 -translate-x-1/2 mb-2 whitespace-nowrap rounded-md bg-popover px-3 py-1.5 text-xs text-popover-foreground border border-border opacity-0 transition-opacity group-hover:opacity-100 z-[9999]">
                     {isPending
                       ? 'Generating...'
