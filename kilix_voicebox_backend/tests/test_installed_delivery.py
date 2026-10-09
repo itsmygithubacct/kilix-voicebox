@@ -1,10 +1,13 @@
 """Installed shell authentication and immutable public-asset boundaries."""
 from pathlib import Path
+import asyncio
 import tempfile
+import threading
 import unittest
 from unittest.mock import patch
 from fastapi.testclient import TestClient
 from kilix_voicebox_backend import main
+from kilix_voicebox_backend.managed_capture import CaptureRefusal
 
 
 class InstalledDeliveryTests(unittest.TestCase):
@@ -44,6 +47,43 @@ class InstalledDeliveryTests(unittest.TestCase):
         (self.ui / 'linked').symlink_to(self.root, target_is_directory=True)
         with self.assertRaises(ValueError):
             main.configure_installed_ui(self.ui, 25417)
+
+
+class InstalledDisconnectTests(unittest.IsolatedAsyncioTestCase):
+    async def test_multipart_disconnect_reaches_owned_client_before_response(self):
+        entered, cleaned = threading.Event(), threading.Event()
+        boundary = 'owned-multipart-disconnect'
+        body = ('--'+boundary+'\r\nContent-Disposition: form-data; name="file"; filename="inert.wav"\r\n'
+            'Content-Type: audio/wav\r\n\r\ninert\r\n--'+boundary+'--\r\n').encode()
+        messages = [{'type':'http.request','body':body,'more_body':False}]
+        async def receive():
+            if messages:
+                return messages.pop(0)
+            if entered.is_set():
+                return {'type':'http.disconnect'}
+            await asyncio.Future()
+        sent = []
+        async def send(message):
+            sent.append(message)
+        def controlled(path, language, gone, *, deadline):
+            entered.set()
+            try:
+                if not gone.wait(1):
+                    raise AssertionError('multipart disconnect was hidden')
+                raise CaptureRefusal('TRANSCRIPTION_STOPPED')
+            finally:
+                cleaned.set()
+        scope = {'type':'http','asgi':{'version':'3.0'},'http_version':'1.1','method':'POST',
+            'scheme':'http','path':'/transcribe','raw_path':b'/transcribe','query_string':b'',
+            'root_path':'','server':('127.0.0.1',25417),'client':('127.0.0.1',1),
+            'headers':[(b'content-type',('multipart/form-data; boundary='+boundary).encode()),
+                (b'content-length',str(len(body)).encode()),(b'x-kilix-voicebox-session',b'1'*64)]}
+        with tempfile.TemporaryDirectory() as scratch, patch.object(main.config,'get_cache_dir',return_value=Path(scratch)), \
+                patch.object(main,'_session_token','1'*64), patch.object(main,'transcribe_owned',controlled):
+            await asyncio.wait_for(main.app(scope,receive,send),2)
+            self.assertTrue(entered.is_set() and cleaned.is_set())
+            self.assertEqual(list(Path(scratch).iterdir()),[])
+        self.assertEqual([m['status'] for m in sent if m['type']=='http.response.start'],[503])
 
 
 if __name__ == '__main__':

@@ -226,17 +226,16 @@ def _media_credential(request: Request) -> str | None:
     return None
 
 
-@app.middleware("http")
-async def enforce_session_credential(request: Request, call_next):
+def _session_refusal(request: Request):
     """Require the per-process credential on every application request."""
 
     # The installed UI is a public immutable shell. It contains no credential,
     # data, or authenticated bootstrap endpoint. Every API/media request below
     # still requires the fresh launch secret.
     if _installed_ui is not None and request.method in {'GET', 'HEAD'} and request.url.path.startswith('/ui/'):
-        return await call_next(request)
+        return None
     if request.method == "OPTIONS" and request.headers.get("origin") in ALLOWED_PRODUCT_ORIGINS | {_installed_origin}:
-        return await call_next(request)
+        return None
     expected = _session_token
     provided = request.headers.get(SESSION_HEADER) or _media_credential(request)
     if expected is None:
@@ -249,19 +248,35 @@ async def enforce_session_credential(request: Request, call_next):
             status_code=401,
             content={"detail": {"code": "SESSION_UNAUTHORIZED"}},
         )
-    return await call_next(request)
+    return None
 
 
-@app.middleware("http")
-async def enforce_product_origin(request: Request, call_next):
-    """Reject browser origins outside the fixed desktop and development surfaces."""
-    origin = request.headers.get("origin")
-    if origin is not None and origin not in ALLOWED_PRODUCT_ORIGINS | {_installed_origin}:
-        return JSONResponse(
-            status_code=403,
-            content={"detail": {"code": "ORIGIN_FORBIDDEN"}},
-        )
-    return await call_next(request)
+class ProductGuard:
+    """Authenticate without wrapping receive or concealing HTTP disconnects.
+
+    Request.is_disconnected must poll the server's actual receive channel.
+    BaseHTTPMiddleware's task-group receive wrapper checkpoints before that
+    poll, so a multipart operation could retain its provider until deadline.
+    """
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope['type'] != 'http':
+            await self.app(scope, receive, send)
+            return
+        request = Request(scope)
+        origin = request.headers.get('origin')
+        refusal = (JSONResponse(status_code=403, content={'detail': {'code': 'ORIGIN_FORBIDDEN'}})
+            if origin is not None and origin not in ALLOWED_PRODUCT_ORIGINS | {_installed_origin}
+            else _session_refusal(request))
+        if refusal is not None:
+            await refusal(scope, receive, send)
+        else:
+            await self.app(scope, receive, send)
+
+
+app.add_middleware(ProductGuard)
 
 
 # ============================================

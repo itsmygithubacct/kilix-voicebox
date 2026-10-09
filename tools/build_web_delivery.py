@@ -13,6 +13,7 @@ import io
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -167,6 +168,10 @@ def build(options):
         catalog = json.loads((options.content_source / 'src/kilix_content/catalog/plebian.json').read_text())
         put('content-catalog.json', json.dumps(catalog, sort_keys=True).encode())
         native = subprocess.check_output(['/usr/bin/ldd', str(python)], text=True)
+        # Loader addresses vary with ASLR and are not a dependency identity.
+        # The bundled runtime is relocatable; record its root symbolically.
+        native = re.sub(r' \(0x[0-9a-f]+\)', '', native)
+        native = native.replace(str(options.python_home.resolve()), '${PYTHON_HOME}')
         probe = ('import sys;sys.path[:0]=sys.argv[1:4];'
             'from voicelib import audio,microphone,device_leases;import kilix_device_lease as canonical;'
             'from pathlib import Path;'
