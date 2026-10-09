@@ -19,7 +19,8 @@ class InstalledDeliveryTests(unittest.TestCase):
         self.ui.mkdir(mode=0o700)
         (self.ui / 'index.html').write_bytes(b'<p>public immutable studio shell</p>')
         (self.ui / 'bundle.js').write_bytes(b'console.log("no session credential");')
-        self.patch = patch.multiple(main, _installed_ui=None, _installed_origin=None, _installed_assets={})
+        self.patch = patch.multiple(main, _installed_ui=None, _installed_origin=None, _installed_assets={},
+                                    _session_token='1' * 64)
         self.patch.start()
         self.addCleanup(self.patch.stop)
         main.configure_installed_ui(self.ui, 25417)
