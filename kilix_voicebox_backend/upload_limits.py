@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+import re
 import tempfile
 import time
 
@@ -15,6 +16,7 @@ MAX_FIELD_BYTES = 64 * 1024
 MAX_HEADER_BYTES = 8 * 1024
 MAX_BOUNDARY_BYTES = 200
 MAX_METADATA_BYTES = MAX_PARTS * (MAX_FIELD_BYTES + MAX_HEADER_BYTES + MAX_BOUNDARY_BYTES)
+MEDIA_TYPE = re.compile(rb"[!#$%&'*+\-.^_`|~0-9A-Za-z]+/[!#$%&'*+\-.^_`|~0-9A-Za-z]+")
 
 
 class UploadRefusal(Exception):
@@ -27,6 +29,42 @@ class UploadRefusal(Exception):
 class UploadBudget:
     file_bytes: int
     seconds: float
+
+
+def ingestion_headers(scope):
+    """Reject ambiguity before either our spool or the framework sees a body.
+
+    ASGI requires lowercase header names. Starlette reads the first matching
+    entry without normalizing raw names, so silently folding names or choosing
+    a duplicate here would give the two parsers different authorities. Wire
+    header casing is normalized by the HTTP server before this boundary.
+    """
+    headers = {}
+    for key, value in scope.get('headers', []):
+        lower = key.lower()
+        if lower not in {b'content-type', b'content-length', b'transfer-encoding'}:
+            continue
+        if key != lower or lower in headers or b'\r' in value or b'\n' in value or b'\0' in value:
+            raise UploadRefusal(400, 'UPLOAD_STRUCTURE')
+        headers[lower] = value
+    if b'transfer-encoding' in headers:
+        if b'content-length' in headers or headers[b'transfer-encoding'].strip(b' \t').lower() != b'chunked':
+            raise UploadRefusal(400, 'UPLOAD_STRUCTURE')
+    content_type = headers.get(b'content-type', b'')
+    kind, _options = parse_options_header(content_type)
+    kind = kind.lower()
+    if b'content-type' in headers and not MEDIA_TYPE.fullmatch(kind):
+        raise UploadRefusal(400, 'UPLOAD_STRUCTURE')
+    if b'content-type' in headers:
+        # The retained multipart parser preserves MIME-token case when options
+        # are present. Normalize the token once for both consumers, retaining
+        # the exact parameter bytes (boundary values remain case-sensitive).
+        _token, separator, parameters = content_type.partition(b';')
+        canonical = kind + separator + parameters
+        headers[b'content-type'] = canonical
+        scope['headers'] = [(key, canonical if key == b'content-type' else value)
+                            for key, value in scope['headers']]
+    return headers, kind
 
 
 class MultipartPopulation:
@@ -83,7 +121,7 @@ class MultipartPopulation:
 
     def headers_finished(self):
         kind, options = parse_options_header(self.headers.get(b'content-disposition', b''))
-        if kind != b'form-data' or not 1 <= len(options.get(b'name', b'')) <= 128:
+        if kind.lower() != b'form-data' or not 1 <= len(options.get(b'name', b'')) <= 128:
             raise UploadRefusal(400, 'UPLOAD_STRUCTURE')
         self.is_file = b'filename' in options
         if self.is_file:
@@ -125,18 +163,21 @@ class BoundedBody:
         self.started = time.monotonic()
         self.deadline = self.started + budget.seconds
         scope['kilix.body_started_at'] = self.started
-        headers = {key.lower(): value for key, value in scope.get('headers', [])}
+        headers, kind = ingestion_headers(scope)
         content_type = headers.get(b'content-type', b'')
-        self.multipart = (MultipartPopulation(content_type, budget.file_bytes)
-                          if content_type.lower().startswith(b'multipart/form-data') else None)
-        self.maximum = budget.file_bytes + (MAX_METADATA_BYTES if self.multipart else 0)
+        is_multipart = kind == b'multipart/form-data'
+        self.maximum = budget.file_bytes + (MAX_METADATA_BYTES if is_multipart else 0)
         if b'content-length' in headers:
-            try:
-                length = int(headers[b'content-length'])
-            except ValueError:
+            length = headers[b'content-length']
+            if not length or any(byte < 48 or byte > 57 for byte in length):
                 raise UploadRefusal(400, 'INPUT_SIZE') from None
-            if not 0 <= length <= self.maximum:
+            # Compare decimal bytes, avoiding int's digit limit on hostile
+            # lengths while accepting ordinary decimal values/leading zeros.
+            length = length.lstrip(b'0') or b'0'
+            maximum = str(self.maximum).encode('ascii')
+            if len(length) > len(maximum) or (len(length) == len(maximum) and length > maximum):
                 raise UploadRefusal(413, 'INPUT_SIZE')
+        self.multipart = MultipartPopulation(content_type, budget.file_bytes) if is_multipart else None
         self.spool = tempfile.SpooledTemporaryFile(max_size=1024 * 1024)
         self.total = self.position = 0
         self.body_delivered = False
