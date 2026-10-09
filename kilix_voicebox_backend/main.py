@@ -29,6 +29,7 @@ from .utils.cache import clear_voice_prompt_cache
 from .kilix_provider import ProviderError
 from .orchestrator import VoiceboxOrchestrator
 from .managed_capture import CaptureBridge, CaptureRefusal, transcribe_owned, until_disconnected
+from .upload_limits import BoundedBody, UploadBudget, UploadRefusal
 from .private_store import (
     MAX_GENERATION_BYTES,
     MAX_SAMPLE_BYTES,
@@ -44,6 +45,10 @@ app = FastAPI(
 
 MAX_PROFILE_ARCHIVE_BYTES = 100 * 1024 * 1024
 MAX_AVATAR_BYTES = 10 * 1024 * 1024
+MAX_TRANSCRIPTION_UPLOAD_BYTES = 2_147_483_648
+MAX_JSON_BODY_BYTES = 4 * 1024 * 1024
+UPLOAD_BODY_SECONDS = 30
+TRANSCRIPTION_SECONDS = 300
 SESSION_HEADER = "x-kilix-voicebox-session"
 _SESSION_TOKEN_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 _session_token: str | None = None
@@ -252,11 +257,10 @@ def _session_refusal(request: Request):
 
 
 class ProductGuard:
-    """Authenticate without wrapping receive or concealing HTTP disconnects.
+    """Authenticate and bound ingestion before the framework parses uploads.
 
-    Request.is_disconnected must poll the server's actual receive channel.
-    BaseHTTPMiddleware's task-group receive wrapper checkpoints before that
-    poll, so a multipart operation could retain its provider until deadline.
+    Once the bounded body is replayed, Request.is_disconnected polls the actual
+    receive channel directly; no task-group/timeout wrapper precedes that poll.
     """
     def __init__(self, app):
         self.app = app
@@ -273,7 +277,25 @@ class ProductGuard:
         if refusal is not None:
             await refusal(scope, receive, send)
         else:
-            await self.app(scope, receive, send)
+            if scope['method'] not in {'POST', 'PUT', 'PATCH'}:
+                await self.app(scope, receive, send)
+                return
+            path = scope['path']
+            maximum = (MAX_PROFILE_ARCHIVE_BYTES if path == '/profiles/import' else
+                       MAX_SAMPLE_BYTES if re.fullmatch(r'/profiles/[^/]+/samples', path) else
+                       MAX_AVATAR_BYTES if re.fullmatch(r'/profiles/[^/]+/avatar', path) else
+                       MAX_TRANSCRIPTION_UPLOAD_BYTES if path == '/transcribe' else MAX_JSON_BODY_BYTES)
+            budget = UploadBudget(maximum, TRANSCRIPTION_SECONDS if path == '/transcribe' else UPLOAD_BODY_SECONDS)
+            body = None
+            try:
+                body = BoundedBody(scope, receive, budget)
+                await body.ingest()
+                await self.app(scope, body.receive, send)
+            except UploadRefusal as error:
+                await JSONResponse(status_code=error.status, content={'detail': {'code': error.code}})(scope, receive, send)
+            finally:
+                if body is not None:
+                    body.close()
 
 
 app.add_middleware(ProductGuard)
@@ -1089,9 +1111,9 @@ async def transcribe_audio(
 ):
     """Transcribe audio file to text."""
     # The original operation budget covers staging, client work and delivery.
-    deadline = time.monotonic() + 300
+    deadline = request.scope.get('kilix.body_started_at', time.monotonic()) + TRANSCRIPTION_SECONDS
     gone = threading.Event()
-    maximum = 2_147_483_648
+    maximum = MAX_TRANSCRIPTION_UPLOAD_BYTES
     tmp_path = None
     try:
         total = 0

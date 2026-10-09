@@ -287,7 +287,9 @@ async def import_profile_from_zip(file_bytes: bytes, db: Session) -> VoiceProfil
             raise ValueError("profile archive name is invalid")
         if len(samples) > MAX_ARCHIVE_ENTRIES - 3:
             raise ValueError("profile archive sample population exceeds its bound")
-        if bool(samples) != manifest["samples_included"]:
+        # This flag is the caller's explicit permission, including an empty
+        # selected population. Samples without permission still refuse.
+        if samples and not manifest["samples_included"]:
             raise ValueError("profile archive sample selection disagrees with its manifest")
 
         sample_payloads: list[tuple[str, str, bytes]] = []

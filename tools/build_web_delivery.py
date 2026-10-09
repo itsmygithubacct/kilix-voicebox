@@ -49,20 +49,13 @@ def module(path, name):
     return value
 
 
-def build(options):
+def package(options, frontend, javascript_inputs, environment):
     sources = {'voicebox': identity(ROOT), 'host': identity(options.host_source),
         'voice': identity(options.voice_source),
         'device-lease': identity(options.lease_source, '9ad28c3a34f8b42c49b116ceaa57184bafaffeda'),
         'transcribe-client': identity(options.transcribe_source, '0c61eb4edcdc75e1aca993ef7c8673b3b9aed6a9'),
         'content': identity(options.content_source, 'b0508c0f98e84d84c85f350ebbd6b4192147dd80')}
-    if subprocess.check_output([str(options.bun), '--version']).strip() != b'1.3.8':
-        raise ValueError('Bun 1.3.8 required')
     locks = {name: digest(ROOT / name) for name in ('bun.lock', 'uv.lock')}
-    environment = {k: v for k, v in os.environ.items() if not k.startswith(('VITE_', 'PYTHON', 'BUN_'))}
-    subprocess.run([str(options.bun), 'run', '--cwd', str(ROOT / 'web'), 'build'],
-        env=environment, check=True)
-    if locks != {name: digest(ROOT / name) for name in locks}:
-        raise ValueError('dependency lock changed during build')
     producer = module(ROOT / 'kilix_voicebox_backend/build_binary.py', '_locked_sidecar_producer')
     packages = producer._locked_packages(tomllib.loads((ROOT / 'uv.lock').read_text()))
     wheels = {}
@@ -139,14 +132,14 @@ def build(options):
                 put('env/' + relative, raw, executable)
             dependency_rows.append({'name': name, 'version': package['version'], 'filename': path.name,
                 'sha256': digest(path), 'bytes': path.stat().st_size, 'record_sha256': record})
-        for path in sorted((ROOT / 'web/dist').rglob('*')):
+        for path in sorted((frontend / 'web/dist').rglob('*')):
             if path.is_file():
-                put('ui/' + path.relative_to(ROOT / 'web/dist').as_posix(), path.read_bytes())
+                put('ui/' + path.relative_to(frontend / 'web/dist').as_posix(), path.read_bytes())
         launcher = options.host_source / 'config/kilix_sdk/voicebox.py'
         put('launch.py', launcher.read_bytes())
         put('licenses/voicebox/LICENSE', (ROOT / 'LICENSE').read_bytes())
         javascript = {}
-        for path in sorted((ROOT / 'node_modules').rglob('package.json')):
+        for path in sorted((frontend / 'node_modules').rglob('package.json')):
             package = json.loads(path.read_text())
             name, version = package.get('name'), package.get('version')
             if not isinstance(name, str) or not isinstance(version, str):
@@ -163,6 +156,7 @@ def build(options):
             javascript[key] = {'name': name, 'version': version,
                 'package_json_sha256': digest(path), 'license': package.get('license'), 'notices': notices}
         put('JS-DEPENDENCIES.json', (json.dumps(javascript, indent=2, sort_keys=True) + '\n').encode())
+        put('JS-INPUTS.json', (json.dumps(javascript_inputs, indent=2, sort_keys=True) + '\n').encode())
         for name in ('bun.lock', 'uv.lock'):
             put('locks/' + name, (ROOT / name).read_bytes())
         catalog = json.loads((options.content_source / 'src/kilix_content/catalog/plebian.json').read_text())
@@ -219,6 +213,17 @@ def build(options):
         print(digest(options.output), options.output.name)
     finally:
         shutil.rmtree(stage)
+
+
+def build(options):
+    identity(ROOT)
+    options.output.parent.mkdir(parents=True, exist_ok=True)
+    dependencies = module(ROOT / 'tools/web_dependencies.py', '_verified_web_dependencies')
+    with dependencies.verified_frontend(ROOT, options.bun, options.output.parent) as (frontend, binding, environment):
+        subprocess.run([str(options.bun), 'run', '--cwd', str(frontend / 'web'), 'build'],
+                       cwd=frontend, env=environment, check=True)
+        dependencies.require_population(dependencies.population(frontend), binding['files_and_links'])
+        package(options, frontend, binding, environment)
 
 
 def main():
