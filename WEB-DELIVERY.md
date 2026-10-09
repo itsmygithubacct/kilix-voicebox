@@ -23,7 +23,7 @@ revision, terms, download/temporary size and pending qualification; provider
 unavailability/refusal remains explicit. Cancellation closes the original owned
 job channel and does not stop shared services.
 
-The final web closure explicitly selects a separately reviewed managed Voice
+The final web closure explicitly selects a separately reviewable managed Voice
 successor on the current published Whistle history and the canonical lease
 component. The historical Transcribe final-only client projection remains
 declared. Old/new streaming providers retain minor-0 compatibility; incremental
