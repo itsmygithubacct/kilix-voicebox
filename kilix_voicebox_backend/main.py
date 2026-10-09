@@ -797,7 +797,10 @@ async def generate_speech(
         
     except HTTPException:
         raise
-    except (ValueError, StoreError):
+    except StoreError as error:
+        raise HTTPException(status_code=409 if error.code == 'CONSENT_REQUIRED' else 400,
+                            detail={"code": error.code}) from None
+    except ValueError:
         raise HTTPException(status_code=400, detail={"code": "GENERATION_INVALID"}) from None
     except (ProviderError, CaptureRefusal) as e:
         status_code = 409 if e.code in {"CONSENT_REQUIRED", "MODEL_MISSING", "RUNTIME_UNSELECTED"} else 503

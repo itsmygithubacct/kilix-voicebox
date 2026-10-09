@@ -50,7 +50,8 @@ def module(path, name):
 
 def build(options):
     sources = {'voicebox': identity(ROOT), 'host': identity(options.host_source),
-        'voice-helper': identity(options.voice_source, '228ac7ae5b1ceb6b8065f3bc1342f90bbc740345'),
+        'voice': identity(options.voice_source),
+        'device-lease': identity(options.lease_source, '9ad28c3a34f8b42c49b116ceaa57184bafaffeda'),
         'transcribe-client': identity(options.transcribe_source, '0c61eb4edcdc75e1aca993ef7c8673b3b9aed6a9'),
         'content': identity(options.content_source, 'b0508c0f98e84d84c85f350ebbd6b4192147dd80')}
     if subprocess.check_output([str(options.bun), '--version']).strip() != b'1.3.8':
@@ -99,13 +100,28 @@ def build(options):
             put('lib/' + relative, subprocess.check_output(['/usr/bin/git', '-C', str(ROOT),
                 'cat-file', 'blob', obj]), mode == '100755')
         projection = json.loads((ROOT / '.kilix-import/sidecar-inputs.json').read_text())
-        for name, source in [('voice', options.voice_source), ('transcribe', options.transcribe_source)]:
+        for name, source in [('transcribe', options.transcribe_source)]:
             for row in projection['sources'][name]['members']:
                 raw = subprocess.check_output(['/usr/bin/git', '-C', str(source), 'show', 'HEAD:' + row['path']])
                 if len(raw) != row['bytes'] or hashlib.sha256(raw).hexdigest() != row['sha256']:
                     raise ValueError('selected helper projection differs')
                 target = row['output']
                 put(('lib/' + target[7:]) if target.startswith('python/') else target, raw)
+        for name, source, prefix, target in (
+            ('voice', options.voice_source, 'voicelib', 'lib/voicelib'),
+            ('device-lease', options.lease_source, 'components/kilix-device-lease/src/kilix_device_lease', 'shared/kilix_device_lease')):
+            for line in git(source, 'ls-tree', '-r', sources[name]['commit'], prefix).splitlines():
+                meta, path = line.split(b'\t', 1)
+                mode, kind, obj = meta.decode().split()
+                if kind != 'blob' or mode not in {'100644', '100755'}:
+                    raise ValueError('unsupported shared source member')
+                relative = Path(path.decode()).relative_to(prefix).as_posix()
+                put(target + '/' + relative, subprocess.check_output(['/usr/bin/git','-C',str(source),
+                    'cat-file','blob',obj]), mode == '100755')
+            put('licenses/' + name + '/LICENSE', (source / ('LICENSE' if name == 'voice'
+                else 'components/kilix-device-lease/LICENSE')).read_bytes())
+        put('lib/VERSION', subprocess.check_output(['/usr/bin/git','-C',str(options.voice_source),
+            'show',sources['voice']['commit']+':VERSION']))
         # Copy the explicit Python home without external symlink dependencies.
         for path in sorted(options.python_home.rglob('*')):
             if path.is_file() and '__pycache__' not in path.parts and path.suffix != '.pyc':
@@ -151,6 +167,14 @@ def build(options):
         catalog = json.loads((options.content_source / 'src/kilix_content/catalog/plebian.json').read_text())
         put('content-catalog.json', json.dumps(catalog, sort_keys=True).encode())
         native = subprocess.check_output(['/usr/bin/ldd', str(python)], text=True)
+        probe = ('import sys;sys.path[:0]=sys.argv[1:4];'
+            'from voicelib import audio,microphone,device_leases;import kilix_device_lease as canonical;'
+            'from pathlib import Path;'
+            'assert device_leases.acquire is canonical.acquire;'
+            'assert not Path(canonical.__file__).resolve().is_relative_to(Path(audio.__file__).resolve().parent.parent);'
+            'import kilix_voicebox_backend.main;print("complete installed backend/shared imports verified")')
+        subprocess.run([str(stage / 'python/bin/python3.12'),'-I','-S','-B','-c',probe,
+            str(stage/'lib'),str(stage/'env'),str(stage/'shared')],check=True,env=environment)
         rows = []
         for path in sorted(stage.rglob('*')):
             if path.is_file():
@@ -161,7 +185,9 @@ def build(options):
                 'license': 'b3d5f52c762d967186bd4d7b63430b057b07aa28',
                 'qwen': 'c8093798a0a643d3dbacea38979b5d27a46744ce',
                 'transcribe': '32e39c4d5b2419c0c698d026d8731b51e4ef3eb1',
-                'voice': 'cba6048cc7d8b6f33a1af5cc3cf84e5c1c34e802'},
+                'voice': sources['voice']['commit'],
+                'voice_base': 'cba6048cc7d8b6f33a1af5cc3cf84e5c1c34e802',
+                'device_lease': sources['device-lease']['commit']},
             'locks': locks, 'dependencies': dependency_rows, 'python_version': '3.12.8',
             'javascript_dependencies': len(javascript),
             'platform': 'linux-x86_64', 'native_prerequisites': native,
@@ -192,7 +218,7 @@ def build(options):
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    for flag in ('host-source', 'voice-source', 'transcribe-source', 'content-source', 'python-home', 'wheelhouse', 'bun', 'output'):
+    for flag in ('host-source', 'voice-source', 'lease-source', 'transcribe-source', 'content-source', 'python-home', 'wheelhouse', 'bun', 'output'):
         parser.add_argument('--' + flag, required=True, type=Path)
     options = parser.parse_args()
     os.umask(0o077)
