@@ -52,9 +52,9 @@ def module(path, name):
 def package(options, frontend, javascript_inputs, environment):
     sources = {'voicebox': identity(ROOT), 'host': identity(options.host_source),
         'voice': identity(options.voice_source),
-        'device-lease': identity(options.lease_source, '9ad28c3a34f8b42c49b116ceaa57184bafaffeda'),
+        'device-lease': identity(options.lease_source, '9316bc2631958f5dcdb3588012d9baca7be1566d'),
         'transcribe-client': identity(options.transcribe_source, '0c61eb4edcdc75e1aca993ef7c8673b3b9aed6a9'),
-        'content': identity(options.content_source, 'b0508c0f98e84d84c85f350ebbd6b4192147dd80')}
+        'content': identity(options.content_source, '2e20fce2a6fa7be5fc2468231e2cc7808e23303d')}
     locks = {name: digest(ROOT / name) for name in ('bun.lock', 'uv.lock')}
     producer = module(ROOT / 'kilix_voicebox_backend/build_binary.py', '_locked_sidecar_producer')
     packages = producer._locked_packages(tomllib.loads((ROOT / 'uv.lock').read_text()))
@@ -180,10 +180,10 @@ def package(options, frontend, javascript_inputs, environment):
                 rows.append({'path': path.relative_to(stage).as_posix(), 'bytes': path.stat().st_size,
                     'sha256': digest(path), 'mode': stat.S_IMODE(path.stat().st_mode)})
         value = {'schema': 'kilix.voicebox.web-delivery/v1', 'sources': sources,
-            'provider_interfaces': {'content': 'b0508c0f98e84d84c85f350ebbd6b4192147dd80',
-                'license': 'b3d5f52c762d967186bd4d7b63430b057b07aa28',
-                'qwen': 'c8093798a0a643d3dbacea38979b5d27a46744ce',
-                'transcribe': '32e39c4d5b2419c0c698d026d8731b51e4ef3eb1',
+            'provider_interfaces': {'content': sources['content']['commit'],
+                'license': '9239370a0e763c2d86bd4c112b8d06f4731a809d',
+                'qwen': '95750c48f2b0aa7bc4d545f58607b3b3a2400ed1',
+                'transcribe': 'cc543b5ad03d2968314a9520ca6fcc2074d0692a',
                 'voice': sources['voice']['commit'],
                 'voice_base': 'cba6048cc7d8b6f33a1af5cc3cf84e5c1c34e802',
                 'device_lease': sources['device-lease']['commit']},
