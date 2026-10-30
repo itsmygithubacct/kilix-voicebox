@@ -15,7 +15,7 @@ from unittest.mock import patch
 
 from fastapi import HTTPException
 from kilix_voicebox_backend import main, managed_capture as capture
-from .voice_optional import VOICE_MICROPHONE_AVAILABLE, audio
+from .voice_optional import VOICE_MICROPHONE_AVAILABLE, capture_class
 
 PEER = str(Path(__file__).with_name("capture_peer.py"))
 
@@ -155,7 +155,7 @@ class CaptureQueueTests(unittest.TestCase):
                                     for pid in json.loads(previous.read_text()).values()))
                 previous.unlink()
             entered, release = threading.Event(), threading.Event()
-            record, read = self.bridge.record, audio.MicCapture.read
+            record, read = self.bridge.record, capture_class.read
             def barrier():
                 entered.set()
                 assert release.wait(6), "owned entry barrier backstop"
@@ -169,7 +169,7 @@ class CaptureQueueTests(unittest.TestCase):
                     barrier()
                 return read(owner, *args, **kwargs)
             task = None
-            with patch.object(self.bridge, "record", at_entry), patch.object(audio.MicCapture, "read", at_read):
+            with patch.object(self.bridge, "record", at_entry), patch.object(capture_class, "read", at_read):
                 try:
                     task = asyncio.create_task(self.handler(Request()))
                     await reached(entered.is_set)

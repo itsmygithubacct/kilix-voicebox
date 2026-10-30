@@ -14,7 +14,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 from kilix_voicebox_backend import main, managed_capture as capture
 from .test_capture_queue import PEER, Request, reached
-from .voice_optional import VOICE_MICROPHONE_AVAILABLE, audio
+from .voice_optional import VOICE_MICROPHONE_AVAILABLE, capture_class
 
 
 @unittest.skipUnless(VOICE_MICROPHONE_AVAILABLE, "managed voice microphone API is not installed")
@@ -44,7 +44,7 @@ class CaptureCleanupTests(unittest.TestCase):
     def test_actual_entered_capture_retries_cleanup_allocation(self):
         async def run():
             entered, release = threading.Event(), threading.Event()
-            original_read = audio.MicCapture.read
+            original_read = capture_class.read
             loop = asyncio.get_running_loop()
             original_future = loop.create_future
             faults = []
@@ -61,7 +61,7 @@ class CaptureCleanupTests(unittest.TestCase):
                     raise MemoryError("one-shot cleanup future allocation")
                 return original_future()
 
-            with patch.object(audio.MicCapture, "read", read):
+            with patch.object(capture_class, "read", read):
                 try:
                     task = asyncio.create_task(self.handler())
                     await reached(entered.is_set)
@@ -168,7 +168,7 @@ class CaptureCleanupTests(unittest.TestCase):
                                     for pid in json.loads(previous.read_text()).values()))
                 previous.unlink()
             entered, release = threading.Event(), threading.Event()
-            original_read = audio.MicCapture.read
+            original_read = capture_class.read
             task = None
             def read(owner, *args, **kwargs):
                 frame = original_read(owner, *args, **kwargs)
@@ -176,7 +176,7 @@ class CaptureCleanupTests(unittest.TestCase):
                     entered.set()
                     assert release.wait(6), "normal control barrier backstop"
                 return frame
-            with patch.object(audio.MicCapture, "read", read):
+            with patch.object(capture_class, "read", read):
                 try:
                     task = asyncio.create_task(self.handler())
                     await reached(entered.is_set)

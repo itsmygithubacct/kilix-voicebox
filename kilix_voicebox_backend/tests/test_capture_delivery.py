@@ -14,7 +14,7 @@ import uuid
 from fastapi import HTTPException
 from kilix_voicebox_backend import main
 from kilix_voicebox_backend.managed_capture import CaptureBridge, CaptureRefusal, until_disconnected
-from .voice_optional import VOICE_MICROPHONE_AVAILABLE, audio, microphone, util
+from .voice_optional import VOICE_MICROPHONE_AVAILABLE, capture_class, microphone, util
 
 PEER = str(Path(__file__).with_name("capture_peer.py"))
 
@@ -65,7 +65,7 @@ class CaptureDeliveryTests(unittest.TestCase):
             with self.subTest(boundary=boundary, mode=mode):
                 self.value = False
                 item = self.bridge.claim(uuid.uuid4().hex, 1, threading.Event())
-                write, stop = util.write_wav, audio.MicCapture.stop
+                write, stop = util.write_wav, capture_class.stop
                 visits = []
                 def serialized(pcm, rate):
                     payload = write(pcm, rate)
@@ -82,7 +82,7 @@ class CaptureDeliveryTests(unittest.TestCase):
                         visits.append(True)
                         self.change(mode, item)
                     return result
-                with patch.object(util, "write_wav", serialized), patch.object(audio.MicCapture, "stop", cleanup):
+                with patch.object(util, "write_wav", serialized), patch.object(capture_class, "stop", cleanup):
                     if mode == "valid":
                         self.assertTrue(self.bridge.record(item).startswith(b"RIFF"))
                     else:

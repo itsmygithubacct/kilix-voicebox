@@ -17,7 +17,7 @@ import wave
 from kilix_voicebox_backend.managed_capture import (
     CaptureBridge, CaptureRefusal, transcribe_owned, until_disconnected,
 )
-from .voice_optional import VOICE_MICROPHONE_AVAILABLE, audio
+from .voice_optional import VOICE_MICROPHONE_AVAILABLE, capture_class
 
 PEER = str(Path(__file__).with_name("capture_peer.py"))
 
@@ -157,11 +157,11 @@ class ManagedCaptureTests(unittest.TestCase):
         thread.join(4)
 
     def test_unproven_final_stop_discards_and_sticks_unavailable(self):
-        original = audio.MicCapture.stop
+        original = capture_class.stop
         def uncertain(capture):
             original(capture)  # Real owned teardown; adapter receives no proof.
             return False
-        with patch.object(audio.MicCapture, "stop", uncertain):
+        with patch.object(capture_class, "stop", uncertain):
             item, _, thread, outcome = self.run_record()
             tree = self.tree()
             wait_for(lambda: item.duration > 0)
@@ -186,8 +186,11 @@ class ManagedCaptureTests(unittest.TestCase):
         self.assertEqual(self.bridge.status()["phase"], "inactive")
 
     def test_actual_supervisor_loss_never_releases_quarantined_device(self):
+        environment = dict(os.environ)
+        environment['PYTHONPATH'] = os.pathsep.join((str(Path(__file__).resolve().parents[2]),
+                                                    environment.get('PYTHONPATH', '')))
         result = subprocess.run([sys.executable, '-B', PEER, 'loss', str(self.root)],
-                                capture_output=True, text=True, timeout=15)
+                                capture_output=True, text=True, timeout=15, env=environment)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertTrue(all(json.loads(result.stdout).values()))
 
